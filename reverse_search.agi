@@ -1,0 +1,428 @@
+#!/usr/bin/perl
+# reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
+#
+# Version 2014.03.28.1
+#
+# http://sysout.twoday.net/stories/714914910
+#
+# Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
+#
+# Sollten die Suchanbieter ihre Webseiten (von denen die gesuchten Namen 
+# zu den Nummern kommen) ändern, so müssen nur die entsprechenden Parser in
+# den Subroutinen (oert, klick, telefonabc, telsearch) angepasst werden.
+# (Diese Routinen setzen [$reverseresult] mit dem Suchergebnis)
+#
+#
+# Aufruf des Skriptes: 
+#        <script> number 1 1 (für Aufrufe von der Shell)
+#        <script> number 0   (Schaltet die Cachesuche aus)
+#        <script> number     (normaler Aufruf aus Asterisk)
+# 
+#
+# Die Suche funktioniert folgendermassen:
+# - Zuerst wird in staticfamily nach einem Eintrag gesucht
+# - dann im Cache ehemaliger Onlineabfragen
+# - dann online
+#
+# Wird online ein Eintrag gefunden, wird dieser im Cache [$cachefamily] gespeichert
+# (und ein zugehoeriger Zeiteintrag in [$cachetsfamily])
+# Das ermöglicht die Nutzung von Verfallsdaten für Einträge und ausserdem können
+# entsprechende Einträge selektiv bereinigt werden, sollte das Script irgendwann
+# Unsinn in die Cachetabelle schreiben
+#
+#
+# ist [$statsfamily] gesetzt, so werden Statistikdaten zu den Abfragen angelegt.
+# Ein Abruf der Statistiken kann an der Asterisk-CLI mit folgendem Aufruf erfolgen:
+#
+# database show cidstats
+#
+#
+# Aufruf an der Shell (Pfad zum Script anpassen):
+# while true; do echo " \n"; sleep 0.1; done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1
+#
+# Viel Erfolg bei der Nutzung!
+
+
+use warnings;
+use strict;
+use utf8; #disable if page doesnt use utf8
+$|=1; # do not buffer output
+
+use Asterisk::AGI; # needed for caching in AstDB, install as root: cpan install "Asterisk::AGI"
+my $AGI = new Asterisk::AGI;
+use String::Util 'trim';
+use HTML::TreeBuilder 5 -weak; # parses the html page, debian sid unstable: libhtml-tree-perl
+use LWP::UserAgent;
+use URI::Escape;
+use Encode;
+
+######################################################################################
+# user defined variables  
+
+my $vl            = 1;         # Print messages at verboselevel @ AsteriskCLI
+my $countryprefix = "\\+";     # usually 00 or \\+
+my $use_klicktel  = 0;         # Klicktel nutzen (hat unscharfe Suche und liefert IMMER (leider auch falsche) Namen
+my $cache         = 1;         # can be enabled permanently, but also be controlled over 2nd start parameter
+my $staticfamily  = "cidname"; # AstDB family von fix gespeichert Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
+my $cachefamily   = "cidcache";# AstDB family der gespeicherten reverse lookups 
+my $cachetsfamily = "cidcachets"; #AstDB family der timestamps zu  den eintraegen in cachefamily 
+my $statsfamily   = "cidstats";# AstDB family der Statisticdatentabelle - (leer = Statistiken ausgeschaltet)
+my $f_expire      = 365;       # Tage, nach denen existierender Cache-Eintrag online neu gesucht wird - (0 = nie)
+my $nf_expire     = 30;        # Tage, nach denen eine nicht-gefundene Nummer nochmals online gesucht wird - (0 = jedesmal)
+                               # wenn beide expire-Zeiten 0 sind, dann werden keine Zeitstempel gespeichert!
+                               
+my $dont_delete_existing = 1;  # wenn gesetzt, werden keine Expired-Cachenames mit Leernamen (=nicht mehr online zu finden) ersetzt 
+
+my $refresh_names_without_ts = 1; # Einträge ohne Zeitstempel via online aktualisieren? (nein = Zeitstempel wird auf aktuelle Zeit gesetzt) (Abwaertskompatibilitaet)
+
+my $ua = LWP::UserAgent->new();
+   $ua->timeout(2);           # Timeout für die Online-Request in Sekunden 
+   $ua->agent('Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0) Opera 12.14'); # Useragentstring
+
+######################################################################################
+
+my $number = trim($ARGV[0]);
+
+my $reverseresult = 0;        #data for actual reverse lookup
+my $searchnotfound = "Can not find predefined html tag or number was not found!";
+my $nowtime = time();          # Zeitstring
+my $expired_c_name = "";       # speichert verfallenen Namen zwischen
+
+$f_expire  = $f_expire  * 86400; # umrechnen in Sekunden
+$nf_expire = $nf_expire * 86400; # umrechnen in Sekunden
+
+$AGI->verbose("RS:        number = (${number})", $vl+1);
+$AGI->verbose("RS: countryprefix = (${countryprefix})", $vl+1);
+$AGI->verbose("RS:  use_klicktel = (${use_klicktel})", $vl+1);
+$AGI->verbose("RS:  staticfamily = (${staticfamily})", $vl+1);
+$AGI->verbose("RS:   cachefamily = (${cachefamily})", $vl+1);
+$AGI->verbose("RS: cachetsfamily = (${cachetsfamily})", $vl+1);
+$AGI->verbose("RS:      f_expire = (${f_expire}) days", $vl+1);
+$AGI->verbose("RS:     nf_expire = (${nf_expire}) days", $vl+1);
+$AGI->verbose("RS: refresh_names_without_ts = (${refresh_names_without_ts})", $vl+1);
+$AGI->verbose("RS:   ua->timeout = (".$ua->timeout().") sec", $vl+1);
+$AGI->verbose("RS:     ua->agent = (".$ua->agent.")", $vl+1);
+$AGI->verbose("RS:       nowtime = (${nowtime})", $vl+1);
+$AGI->verbose("RS:         cache = (${cache})", $vl+1);
+$AGI->verbose("RS:  verboselevel = (${vl})", $vl+1);
+
+if (! $ARGV[0]) {
+    $AGI->verbose("RS: FATAL Missing argument: number. Exit ...", $vl);
+    exit;
+}else{
+    $AGI->verbose("RS: Lookup number: ${number}", $vl);
+}
+
+if (defined $ARGV[1]) { #use as 2nd parameter if found
+    $cache = $ARGV[1];
+    $AGI->verbose("RS: Cache argument set: \"${cache}\" - use cache: ".($cache ? "yes":"no"), $vl);
+}
+
+if (!defined $ARGV[2]) { #use as 3nd parameter if found
+    # nur wenn kein 2. Parameter angegeben ist, dann inputpasrsing (an der Shell funktioniert das nicht)
+    my %input = $AGI->ReadParse(); # AGI Eingabeverarbeitung
+}
+
+
+my %countrylist = ('at' => 43, 'ch' => 41, 'de' => 49); #sub reverselookup has to be changed if modified
+my $countlist = keys %countrylist; #this is currently only used to display error if country was not defined
+my $i = 0;
+
+    # in der fixen Datenbank suchen
+    if ($staticfamily){ # wenn Datenbank konfiguriert ist
+        my $astdbstaticget = $AGI->database_get($staticfamily, $number);
+        if($astdbstaticget) {
+            $AGI->verbose("RS: Staticsearch(0): Name found in [${staticfamily}] - (${astdbstaticget})", $vl);
+            $AGI->set_variable("RESULTREV", $astdbstaticget);
+            addstats("_static",1,0,0,0,0);
+            exit;
+        }else{
+            $AGI->verbose("RS: Staticsearch(1): Name not found in [${staticfamily}]", $vl);
+            addstats("_static",0,0,1,0,0);
+        }
+    }else{ # fixe Datenbank ist nicht konfiguriert
+        $AGI->verbose("RS: Staticsearch(3): DB not configured", $vl);
+    }
+
+    # im Cache suchen - im wesentlichen expireverwaltung
+    if ($cache == 1) {
+        if(!$cachefamily){ $AGI->verbose("RS: FATAL Cachesearch(!): Cache DB for names not configured! Exit ..", $vl); exit;} 
+        if(!$cachetsfamily){ $AGI->verbose("RS: FATAL Cachesearch(!): Cache DB for timestamps not configured! Exit ..", $vl); exit;} 
+   
+        my $c_name   = $AGI->database_get($cachefamily,"\"${number}\"");  # Eintrag in der Namen-Tabelle suchen
+        my $c_namets = $AGI->database_get($cachetsfamily,"\"${number}\"");# Eintrag in der Timestamp-Tabelle suchen
+        
+        # Eintrag gefunden - noch gültig?
+        if ( $c_name){
+             $AGI->verbose("RS: Cachesearch(-): Name found (${c_name})", $vl);
+            
+            # falls kein zugeh. Zeitstempel existiert aber Verfallsdatum benötigt wird
+            if (! defined $c_namets && $f_expire){
+                $AGI->verbose("RS: Cachesearch(0): Name found without TS. ".($refresh_names_without_ts ? "SET EXPIRED" : "Set TS to NOW.")." (refresh_names_without_ts)", $vl);
+                $c_namets = $refresh_names_without_ts ? 0 : $nowtime;
+            }
+
+            if($f_expire == 0 || $f_expire + $c_namets > $nowtime){ # gefunden und gültig
+                $AGI->verbose("RS: Cachesearch(1): Name found".($f_expire ? " (expires in ".int(($f_expire + $c_namets - $nowtime)/86400)." days)":" (no expiry configured)"), $vl);
+                $AGI->set_variable("RESULTREV", $c_name);
+                addstats("_cache",1,0,0,0,0);
+                exit;
+            }else{ # gefunden, aber expired
+                $AGI->verbose("RS: Cachesearch(2): Name found (EXPIRED since ".int(($nowtime - $f_expire - $c_namets)/86400)." days) -> search online", $vl);
+                $expired_c_name = $c_name;
+                addstats("_cache",0,0,0,1,0);
+                reverselookup();
+            }
+        }else{ # keinen Namens-Eintrag gefunden
+            if( defined $c_namets){ # es gibt einen Zeitstempel zur Nummer, d.h. die Nummer wurde schon einmal online nicht gefunden
+                if($nf_expire > 0 && $nf_expire + $c_namets > $nowtime){ # nicht nochmals online suchen - nicht expired
+                    $AGI->verbose("RS: Cachesearch(3): Empty Name (unsuccessful search) found (expires in ".int(($nf_expire + $c_namets - $nowtime)/86400)." days) -> no new search", $vl);
+                    $AGI->set_variable("RESULTREV", "");
+                    addstats("_cache",0,1,0,0,0);
+                    exit;
+                }else{ # expired - online suchen
+                    $AGI->verbose("RS: Cachesearch(4): Empty Name (unsuccessful search) found ".($nf_expire ? "(EXPIRED since ".int(($nowtime - $nf_expire - $c_namets)/86400)." days)" : "(no expiry configured)")." -> search online", $vl);
+                    addstats("_cache",0,0,0,1,0);
+                    reverselookup();
+                }
+            }else{ # kein zeitstempeleintrag gefunden
+                $AGI->verbose("RS: Cachesearch(5): No Name/TS-Entry found -> search online", $vl);
+                addstats("_cache",0,0,1,0,0);
+                reverselookup();
+            }
+        }
+        
+        # Ergebnisse des Reverse-Lookups verarbeiten
+            
+        # Cache-Timestamp zu der Nummer speichern
+        if( $nf_expire > 0 || $f_expire > 0 ){
+            $AGI->database_put($cachetsfamily, "\"${number}\"", "\"${nowtime}\"");
+            $AGI->verbose("RS: Onlinesearch(1): TS saved [${cachetsfamily}]: ${number} ${nowtime}", $vl);
+        }
+
+        # gefundene Nummer im Cache speichern
+        if( defined $reverseresult) {
+            $AGI->verbose("RS: Onlinesearch(2): Name found - (${reverseresult})", $vl);
+            $AGI->database_put($cachefamily, "\"${number}\"", "\"${reverseresult}\"");
+            $AGI->verbose("RS: Onlinesearch(3): Name saved [${cachefamily}]: ${number} ${reverseresult}", $vl);
+            $AGI->set_variable("RESULTREV", $reverseresult);
+            exit;
+        }else{
+            $AGI->verbose("RS: Onlinesearch(4): Name NOT found", $vl);
+            if( $expired_c_name){
+                if(! $dont_delete_existing){
+                    $AGI->verbose("RS: Onlinesearch(5): Delete expired and not found name (${expired_c_name}) from database (dont_delete_existing=0)", $vl);
+                    $AGI->database_del($cachefamily, "\"${number}\"");
+                }else{
+                    $AGI->verbose("RS: Onlinesearch(6): Do not delete expired and not found name (${expired_c_name}) from database (dont_delete_existing=1)", $vl);
+                }
+            }
+          
+            $AGI->set_variable("RESULTREV", "");
+            exit;
+        }
+       
+
+    } else { # no caching
+        $AGI->verbose("RS: Cache not enabled - Do uncached reverse lookup (online)", $vl);
+        reverselookup();
+        if( defined $reverseresult) {
+            $AGI->verbose("RS: Onlinesearch(5): Name found - \"${reverseresult}\"", $vl);
+            $AGI->set_variable("RESULTREV", $reverseresult);
+            exit;
+        }else{
+            $AGI->verbose("RS: Onlinesearch(6): Name NOT found", $vl);
+            $AGI->set_variable("RESULTREV", "");
+            exit;
+        }
+    }
+
+    # sollte nie aufgerufen werden
+    $AGI->verbose("RS: Fehler",0);
+    exit;
+
+sub reverselookup {
+    $AGI->verbose("RS: Do reverse lookup (online) now", $vl);  
+    if ( grep {/^$countryprefix/} $number ) { #if call from other country
+
+        while ( (my $key, my $value) = each %countrylist ) { #iterate through hash
+            if ( grep {/^$countryprefix$countrylist{$key}/} $number ) { #grep country prefix + country code in beginning of phone number
+                $AGI->verbose("RS: Number from country: ".$key, $vl);
+                if ($key eq "at") {
+                    telefonabc($number);
+                } elsif ($key eq "ch") {
+                    telsearch($number);
+                } elsif ($key eq "de") {
+                    oert($number);
+                    if(! $reverseresult && $use_klicktel){
+                        klick($number);
+                    }
+                } 
+            } else {
+                $i = $i+1;
+                if ($i == $countlist) {
+                    $AGI->verbose("RS: Country not defined", $vl);
+                }
+            }
+        }
+
+    } else { #if landline number 
+        oert($number);
+        if (! $reverseresult && $use_klicktel) { #do klicktel if oertliches did not find
+            klick($number);
+        }
+    }
+}
+
+## german numbers (de) ##
+
+sub oert {
+    $reverseresult = undef;
+    my $urloert = "http://www.dasoertliche.de/?form_name=search_inv&ph=".uri_escape($number);
+    my $responseoert = $ua->get($urloert);
+    if($responseoert->is_success){
+        my $htmloert = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $responseoert->content())));
+
+#        if (( 1 == 2 ) && ( defined $htmloert )) {
+        if (defined $htmloert ) {
+            $reverseresult = $htmloert->look_down(
+            _tag => 'a',
+            class => 'preview iname');
+            if (defined $reverseresult ) {
+                $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
+                $AGI->verbose("RS: oert(online) Gefunden: [".$reverseresult."]", $vl);
+                #$AGI->set_variable("RESULTREV", $reverseresult);
+                addstats("DE-oert",1,0,0,0,0); # hit
+            } else {
+                $AGI->verbose("RS: oert(online): Nummer nicht gefunden", $vl);
+                addstats("DE-oert",0,1,0,0,0); # empty hit
+            }
+
+        } else {
+            $AGI->verbose("RS: oert(online): Treebuilder cannot read page!", $vl);
+            addstats("DE-oert",0,0,1,0,0); # miss - Parsingfehler
+        }
+    }else{
+        $AGI->verbose("RS: oert(online): HTTP-Request failed: ".$responseoert->status_line, $vl);
+        addstats("DE-oert",0,0,0,0,1); # error - Requesterror
+    }
+}
+
+sub klick {
+    $reverseresult  = undef;
+    my $urlklick = "http://www.klicktel.de/rueckwaertssuche/".uri_escape($number);
+    my $responseklick = $ua->get($urlklick);
+    if($responseklick->is_success){
+        my $tree = HTML::TreeBuilder->new_from_content( $responseklick->content );
+
+        if (defined $tree ) {
+            my $e = $tree->look_down(_tag => 'div', class => 'results direct');
+            if(defined $e){
+                $reverseresult = $e->look_down(_tag => 'a');
+
+                if ( $reverseresult ) {
+                    $reverseresult = substr($reverseresult->as_trimmed_text(extra_chars => '\xA0'),3);
+                    $AGI->verbose("RS: klick(online) Gefunden: [".$reverseresult."]", $vl);
+                    addstats("DE-klick",1,0,0,0,0); # hit
+                } else {
+                    $AGI->verbose("RS: klick(online): Nummer nicht gefunden", $vl);
+                    addstats("DE-klick",0,1,0,0,0); # empty hit
+                }
+            } else {
+                $AGI->verbose("RS: klick(online): Nummer nicht gefunden", $vl);
+                addstats("DE-klick",0,1,0,0,0); # empty hit
+            }
+        } else {
+            $AGI->verbose("RS: klick(online): Treebuilder cannot read page!", $vl);
+            addstats("DE-klick",0,0,1,0,0); # miss - Parsingfehler
+        }
+    }else{
+        $AGI->verbose("RS: klick(online): HTTP-Request failed: ". $responseklick->status_line,2);
+        addstats("DE-kick",0,0,0,0,1); # error - Requesterror
+    }
+}
+
+## austria numbers (at) ##
+
+sub telefonabc {
+    $reverseresult = undef;
+    my $urltelefonabc = "http://www.telefonabc.at/result.aspx?what=".uri_escape($number);
+    my $responsetelefonabc = $ua->get($urltelefonabc);
+    if($responsetelefonabc->is_success){
+        my $htmltelefonabc = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $responsetelefonabc->content())));
+        if ( defined $htmltelefonabc ) {
+            $reverseresult = $htmltelefonabc->look_down(
+#            _tag => 'span',
+#            class => 'given-name');
+            _tag => 'a',
+            class => 'h_green');
+            if (defined $reverseresult ) {
+                $reverseresult = $reverseresult->as_trimmed_text;
+                addstats("AT-tabc",1,0,0,0,0); # hit
+            } else {
+                $AGI->verbose("RS: telefonabc(online): Nummer nicht gefunden", $vl);
+                addstats("AT-tabc",0,1,0,0,0); # empty hit
+            }
+        } else {
+            $AGI->verbose("RS: telefonabc(online): Treebuilder cannot read page!", $vl);
+            addstats("AT-tabc",0,0,1,0,0); # miss - Parsingfehler
+        }
+    }else{
+        $AGI->verbose("RS: telefonabc.at(online): HTTP-Request failed: ". $responsetelefonabc->status_line, $vl);
+        addstats("AT-tabc",0,0,0,0,1); # error - Requesterror
+    }
+}
+
+## swiss numbers (ch) ##
+
+sub telsearch {
+    $reverseresult = "";
+    
+    my $urltelsearch = "http://tel.search.ch/?was=".uri_escape($number);
+    my $responsetelsearch = $ua->get($urltelsearch);
+    if($responsetelsearch->is_success){
+        my $htmltelsearch = HTML::TreeBuilder->new_from_content ( $responsetelsearch->content );
+        if ( defined $htmltelsearch ) {
+            $reverseresult = $htmltelsearch->look_down(
+            _tag => 'a',
+            class => qr/^(?:fn org|fn)$/);
+        
+            if (defined $reverseresult ) {
+                $reverseresult = $reverseresult->as_trimmed_text;
+                addstats("CH-tels",1,0,0,0,0); # hit
+            } else {
+                $AGI->verbose("RS: telsearch(online): Nummer nicht gefunden", $vl);
+                addstats("CH-tels",0,1,0,0,0); # empty hit
+            }
+        } else {
+            $AGI->verbose("RS: telsearch(online): Treebuilder cannot read page!", $vl);
+            addstats("CH-tels",0,0,1,0,0); # miss - Parsingfehler
+        }
+    }else{
+        $AGI->verbose("RS: telsearch(online): HTTP-Request failed: ". $responsetelsearch->status_line, $vl);
+        addstats("CH-tels",0,0,0,0,1); # error - Requesterror
+    
+    }
+}
+
+
+# arg[0] = Subject , z.B. _static, _cache, DE-oert, DE-klick, AT-abc, CH-telsearch
+# arg[1] = Hits to add              [hitfound]  valider Fund, Name gefunden
+# arg[2] = Hits (empty) to add      [hitempty]  Online: Not found - Cache: gefunden, aber gespeichert war eine erfolglose Suche (kein Name)
+# arg[3] = Misses to add            [miss]      Online: Parsingfehler - Cache: Kein Eintrag - Nicht gefunden
+# arg[4] = Expired to add           [expi]       Cache: verfallenen Eintrag gefunden
+# arg[5] = Errors to add            [erro]      Online: Requesterror (Seitenaufruf fehlgeschlagen oder Timeout)
+#                                   [all] = Summe aller Aufrufe dieses Subjects
+sub addstats {
+    if( !$statsfamily){ return;}
+    if( !defined $_[0] ||  !defined $_[1] || !defined $_[2] || !defined $_[3] || !defined $_[4] || !defined $_[5] ){
+        $AGI->verbose("RS: Stats: Missing argument!", $vl);
+        return;
+    }
+    $AGI->database_put($statsfamily, "\"${_[0]}-all\"", "\"".(($AGI->database_get($statsfamily, "\"${_[0]}-all\"") || 0) + $_[1] + $_[2] + $_[3] + $_[4] + $_[5])."\"");
+    $_[1] ? $AGI->database_put($statsfamily, "\"${_[0]}-hitfound\"", "\"".(($AGI->database_get($statsfamily, "\"${_[0]}-hitfound\"") || 0) + $_[1])."\"") : 0;
+    $_[2] ? $AGI->database_put($statsfamily, "\"${_[0]}-hitempty\"", "\"".(($AGI->database_get($statsfamily, "\"${_[0]}-hitempty\"") || 0) + $_[2])."\"") : 0;
+    $_[3] ? $AGI->database_put($statsfamily, "\"${_[0]}-miss\"", "\"".(($AGI->database_get($statsfamily, "\"${_[0]}-miss\"") || 0) + $_[3])."\"") : 0;
+    $_[4] ? $AGI->database_put($statsfamily, "\"${_[0]}-expi\"", "\"".(($AGI->database_get($statsfamily, "\"${_[0]}-expi\"") || 0) + $_[4])."\"") : 0;
+    $_[5] ? $AGI->database_put($statsfamily, "\"${_[0]}-erro\"", "\"".(($AGI->database_get($statsfamily, "\"${_[0]}-erro\"") || 0) + $_[5])."\"") : 0;
+}
