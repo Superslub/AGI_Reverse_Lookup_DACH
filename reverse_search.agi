@@ -1,7 +1,9 @@
 #!/usr/bin/perl
 # reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
 #
-# Version 2014.03.28.1
+# Version 
+# 2014.04.02   LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
+# 2014.03.28.1 Initial
 #
 # http://sysout.twoday.net/stories/714914910
 #
@@ -52,9 +54,9 @@ use Asterisk::AGI; # needed for caching in AstDB, install as root: cpan install 
 my $AGI = new Asterisk::AGI;
 use String::Util 'trim';
 use HTML::TreeBuilder 5 -weak; # parses the html page, debian sid unstable: libhtml-tree-perl
-use LWP::UserAgent;
 use URI::Escape;
 use Encode;
+use LWPx::ParanoidAgent;
 
 ######################################################################################
 # user defined variables  
@@ -75,8 +77,8 @@ my $dont_delete_existing = 1;  # wenn gesetzt, werden keine Expired-Cachenames m
 
 my $refresh_names_without_ts = 1; # Einträge ohne Zeitstempel via online aktualisieren? (nein = Zeitstempel wird auf aktuelle Zeit gesetzt) (Abwaertskompatibilitaet)
 
-my $ua = LWP::UserAgent->new();
-   $ua->timeout(2);           # Timeout für die Online-Request in Sekunden 
+my $ua = LWPx::ParanoidAgent->new();
+   $ua->timeout(3);            # Absolutes Timeout (LWPx!) für die Online-Requests in Sekunden
    $ua->agent('Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0) Opera 12.14'); # Useragentstring
 
 ######################################################################################
@@ -124,7 +126,7 @@ if (!defined $ARGV[2]) { #use as 3nd parameter if found
 }
 
 
-my %countrylist = ('at' => 43, 'ch' => 41, 'de' => 49); #sub reverselookup has to be changed if modified
+my %countrylist = ('AT' => 43, 'CH' => 41, 'DE' => 49); #sub reverselookup has to be changed if modified
 my $countlist = keys %countrylist; #this is currently only used to display error if country was not defined
 my $i = 0;
 
@@ -194,29 +196,33 @@ my $i = 0;
         
         # Ergebnisse des Reverse-Lookups verarbeiten
             
-        # Cache-Timestamp zu der Nummer speichern
-        if( $nf_expire > 0 || $f_expire > 0 ){
-            $AGI->database_put($cachetsfamily, "\"${number}\"", "\"${nowtime}\"");
-            $AGI->verbose("RS: Onlinesearch(1): TS saved [${cachetsfamily}]: ${number} ${nowtime}", $vl);
-        }
-
-        # gefundene Nummer im Cache speichern
+        # gefundene Nummer (auch leer) im Cache speichern
         if( defined $reverseresult) {
-            $AGI->verbose("RS: Onlinesearch(2): Name found - (${reverseresult})", $vl);
-            $AGI->database_put($cachefamily, "\"${number}\"", "\"${reverseresult}\"");
-            $AGI->verbose("RS: Onlinesearch(3): Name saved [${cachefamily}]: ${number} ${reverseresult}", $vl);
-            $AGI->set_variable("RESULTREV", $reverseresult);
-            exit;
-        }else{
-            $AGI->verbose("RS: Onlinesearch(4): Name NOT found", $vl);
-            if( $expired_c_name){
-                if(! $dont_delete_existing){
-                    $AGI->verbose("RS: Onlinesearch(5): Delete expired and not found name (${expired_c_name}) from database (dont_delete_existing=0)", $vl);
-                    $AGI->database_del($cachefamily, "\"${number}\"");
-                }else{
-                    $AGI->verbose("RS: Onlinesearch(6): Do not delete expired and not found name (${expired_c_name}) from database (dont_delete_existing=1)", $vl);
+            # Cache-Timestamp zur Nummer speichern - auch für nicht-gefundene Nummern
+            if( $nf_expire > 0 || $f_expire > 0 ){ # nur wenn expire-Zeiten gesetzt sind
+                $AGI->database_put($cachetsfamily, "\"${number}\"", "\"${nowtime}\"");
+                $AGI->verbose("RS: Onlinesearch(1): TS saved [${cachetsfamily}]: ${number} ${nowtime}", $vl);
+            }
+
+            # Nummer (wenn gefunden) im Cache speichern
+            if($reverseresult){
+                $AGI->verbose("RS: Onlinesearch(2): Name found - (${reverseresult})", $vl);
+                $AGI->database_put($cachefamily, "\"${number}\"", "\"${reverseresult}\"");
+                $AGI->verbose("RS: Onlinesearch(3): Name saved [${cachefamily}]: ${number} ${reverseresult}", $vl);
+            }else{ # Nummer nicht gefunden
+                if( $expired_c_name){
+                    if(! $dont_delete_existing){
+                        $AGI->verbose("RS: Onlinesearch(5): Delete expired and not found name (${expired_c_name}) from database (dont_delete_existing=0)", $vl);
+                        $AGI->database_del($cachefamily, "\"${number}\"");
+                    }else{
+                        $AGI->verbose("RS: Onlinesearch(6): Do not delete expired and not found name (${expired_c_name}) from database (dont_delete_existing=1)", $vl);
+                    }
                 }
             }
+            $AGI->set_variable("RESULTREV", $reverseresult);
+            exit;
+        }else{ # Fehler bei der Abfrage
+            $AGI->verbose("RS: Onlinesearch(4): Error finding Name", $vl);
           
             $AGI->set_variable("RESULTREV", "");
             exit;
@@ -248,11 +254,11 @@ sub reverselookup {
         while ( (my $key, my $value) = each %countrylist ) { #iterate through hash
             if ( grep {/^$countryprefix$countrylist{$key}/} $number ) { #grep country prefix + country code in beginning of phone number
                 $AGI->verbose("RS: Number from country: ".$key, $vl);
-                if ($key eq "at") {
+                if ($key eq "AT") {
                     telefonabc($number);
-                } elsif ($key eq "ch") {
+                } elsif ($key eq "CH") {
                     telsearch($number);
-                } elsif ($key eq "de") {
+                } elsif ($key eq "DE") {
                     oert($number);
                     if(! $reverseresult && $use_klicktel){
                         klick($number);
@@ -294,6 +300,7 @@ sub oert {
                 #$AGI->set_variable("RESULTREV", $reverseresult);
                 addstats("DE-oert",1,0,0,0,0); # hit
             } else {
+                $reverseresult = "";
                 $AGI->verbose("RS: oert(online): Nummer nicht gefunden", $vl);
                 addstats("DE-oert",0,1,0,0,0); # empty hit
             }
@@ -325,10 +332,12 @@ sub klick {
                     $AGI->verbose("RS: klick(online) Gefunden: [".$reverseresult."]", $vl);
                     addstats("DE-klick",1,0,0,0,0); # hit
                 } else {
+                    $reverseresult = "";
                     $AGI->verbose("RS: klick(online): Nummer nicht gefunden", $vl);
                     addstats("DE-klick",0,1,0,0,0); # empty hit
                 }
             } else {
+                $reverseresult = "";
                 $AGI->verbose("RS: klick(online): Nummer nicht gefunden", $vl);
                 addstats("DE-klick",0,1,0,0,0); # empty hit
             }
@@ -360,6 +369,7 @@ sub telefonabc {
                 $reverseresult = $reverseresult->as_trimmed_text;
                 addstats("AT-tabc",1,0,0,0,0); # hit
             } else {
+                $reverseresult = "";
                 $AGI->verbose("RS: telefonabc(online): Nummer nicht gefunden", $vl);
                 addstats("AT-tabc",0,1,0,0,0); # empty hit
             }
@@ -369,7 +379,8 @@ sub telefonabc {
         }
     }else{
         $AGI->verbose("RS: telefonabc.at(online): HTTP-Request failed: ". $responsetelefonabc->status_line, $vl);
-        addstats("AT-tabc",0,0,0,0,1); # error - Requesterror
+        ;addstats("AT-tabc",0,0,0,0,1); # error - Requesterror
+        addstats("AT-tabc",0,1,0,0,1); # empty hit - telefonabc liefert Status 404 bei nichtgefundener Nummer!
     }
 }
 
@@ -391,6 +402,7 @@ sub telsearch {
                 $reverseresult = $reverseresult->as_trimmed_text;
                 addstats("CH-tels",1,0,0,0,0); # hit
             } else {
+                $reverseresult = "";
                 $AGI->verbose("RS: telsearch(online): Nummer nicht gefunden", $vl);
                 addstats("CH-tels",0,1,0,0,0); # empty hit
             }
