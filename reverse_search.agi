@@ -2,6 +2,8 @@
 # reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
 #
 # Version 
+# 
+# 2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
 # 2014.04.02   LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
 # 2014.03.28.1 Initial
 #
@@ -222,8 +224,7 @@ my $i = 0;
             $AGI->set_variable("RESULTREV", $reverseresult);
             exit;
         }else{ # Fehler bei der Abfrage
-            $AGI->verbose("RS: Onlinesearch(4): Error finding Name", $vl);
-          
+            $AGI->verbose("RS: Onlinesearch(4): ERROR - Onlinesearch failed", $vl);
             $AGI->set_variable("RESULTREV", "");
             exit;
         }
@@ -247,6 +248,9 @@ my $i = 0;
     $AGI->verbose("RS: Fehler",0);
     exit;
 
+
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub reverselookup {
     $AGI->verbose("RS: Do reverse lookup (online) now", $vl);  
     if ( grep {/^$countryprefix/} $number ) { #if call from other country
@@ -280,18 +284,19 @@ sub reverselookup {
     }
 }
 
-## german numbers (de) ##
-
+## german numbers (DE) ##
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub oert {
     $reverseresult = undef;
-    my $urloert = "http://www.dasoertliche.de/?form_name=search_inv&ph=".uri_escape($number);
-    my $responseoert = $ua->get($urloert);
-    if($responseoert->is_success){
-        my $htmloert = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $responseoert->content())));
+    my $url = "http://www.dasoertliche.de/?form_name=search_inv&ph=".uri_escape($number);
+    my $response = $ua->get($url);
+    if($response->is_success && length($response->content) > 5000){ # Laenge wegen T-Online "Navigationshilfe" o.ä.
+        my $html = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $response->content())));
 
 #        if (( 1 == 2 ) && ( defined $htmloert )) {
-        if (defined $htmloert ) {
-            $reverseresult = $htmloert->look_down(
+        if (defined $html ) {
+            $reverseresult = $html->look_down(
             _tag => 'a',
             class => 'preview iname');
             if (defined $reverseresult ) {
@@ -310,17 +315,19 @@ sub oert {
             addstats("DE-oert",0,0,1,0,0); # miss - Parsingfehler
         }
     }else{
-        $AGI->verbose("RS: oert(online): HTTP-Request failed: ".$responseoert->status_line, $vl);
+        $AGI->verbose("RS: oert(online): HTTP-Request failed (".length($response->content)."): ".$response->status_line, $vl);
         addstats("DE-oert",0,0,0,0,1); # error - Requesterror
     }
 }
-
+## german numbers (DE) ##
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub klick {
     $reverseresult  = undef;
-    my $urlklick = "http://www.klicktel.de/rueckwaertssuche/".uri_escape($number);
-    my $responseklick = $ua->get($urlklick);
-    if($responseklick->is_success){
-        my $tree = HTML::TreeBuilder->new_from_content( $responseklick->content );
+    my $url = "http://www.klicktel.de/rueckwaertssuche/".uri_escape($number);
+    my $response = $ua->get($url);
+    if($response->is_success && length($response->content) > 5000){ # Laenge wegen T-Online "Navigationshilfe" o.ä.){
+        my $tree = HTML::TreeBuilder->new_from_content( $response->content );
 
         if (defined $tree ) {
             my $e = $tree->look_down(_tag => 'div', class => 'results direct');
@@ -346,21 +353,22 @@ sub klick {
             addstats("DE-klick",0,0,1,0,0); # miss - Parsingfehler
         }
     }else{
-        $AGI->verbose("RS: klick(online): HTTP-Request failed: ". $responseklick->status_line,2);
+        $AGI->verbose("RS: klick(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line,2);
         addstats("DE-kick",0,0,0,0,1); # error - Requesterror
     }
 }
 
-## austria numbers (at) ##
-
+## austria numbers (AT) +43 ##
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub telefonabc {
     $reverseresult = undef;
-    my $urltelefonabc = "http://www.telefonabc.at/result.aspx?what=".uri_escape($number);
-    my $responsetelefonabc = $ua->get($urltelefonabc);
-    if($responsetelefonabc->is_success){
-        my $htmltelefonabc = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $responsetelefonabc->content())));
-        if ( defined $htmltelefonabc ) {
-            $reverseresult = $htmltelefonabc->look_down(
+    my $url = "http://www.telefonabc.at/result.aspx?what=".uri_escape($number);
+    my $response = $ua->get($url);
+    if($response->is_success && length($response->content) > 5000){
+        my $html = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $response->content())));
+        if ( defined $html ) {
+            $reverseresult = $html->look_down(
 #            _tag => 'span',
 #            class => 'given-name');
             _tag => 'a',
@@ -378,23 +386,29 @@ sub telefonabc {
             addstats("AT-tabc",0,0,1,0,0); # miss - Parsingfehler
         }
     }else{
-        $AGI->verbose("RS: telefonabc.at(online): HTTP-Request failed: ". $responsetelefonabc->status_line, $vl);
-        ;addstats("AT-tabc",0,0,0,0,1); # error - Requesterror
-        addstats("AT-tabc",0,1,0,0,1); # empty hit - telefonabc liefert Status 404 bei nichtgefundener Nummer!
+        if(substr($response->status_line,0,3) == "404" && length($response->content) > 5000){
+            $reverseresult = "";
+            $AGI->verbose("RS: telefonabc.at(online): Nummer nicht gefunden (404)", $vl);
+            addstats("AT-tabc",0,1,0,0,0); # empty hit - telefonabc liefert Status 404 bei nichtgefundener Nummer!
+        }else{
+            $AGI->verbose("RS: telefonabc.at(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
+            addstats("AT-tabc",0,0,0,0,1); # error - Requesterror "echter" 404
+        }
     }
 }
 
-## swiss numbers (ch) ##
-
+## swiss numbers (CH) +41 ##
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub telsearch {
-    $reverseresult = "";
+    $reverseresult = undef;
     
-    my $urltelsearch = "http://tel.search.ch/?was=".uri_escape($number);
-    my $responsetelsearch = $ua->get($urltelsearch);
-    if($responsetelsearch->is_success){
-        my $htmltelsearch = HTML::TreeBuilder->new_from_content ( $responsetelsearch->content );
-        if ( defined $htmltelsearch ) {
-            $reverseresult = $htmltelsearch->look_down(
+    my $url = "http://tel.search.ch/?was=".uri_escape($number);
+    my $response = $ua->get($url);
+    if($response->is_success && length($response->content) > 5000){
+        my $html = HTML::TreeBuilder->new_from_content ( $response->content );
+        if ( defined $html ) {
+            $reverseresult = $html->look_down(
             _tag => 'a',
             class => qr/^(?:fn org|fn)$/);
         
@@ -411,9 +425,8 @@ sub telsearch {
             addstats("CH-tels",0,0,1,0,0); # miss - Parsingfehler
         }
     }else{
-        $AGI->verbose("RS: telsearch(online): HTTP-Request failed: ". $responsetelsearch->status_line, $vl);
+        $AGI->verbose("RS: telsearch(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
         addstats("CH-tels",0,0,0,0,1); # error - Requesterror
-    
     }
 }
 
