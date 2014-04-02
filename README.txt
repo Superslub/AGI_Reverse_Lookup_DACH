@@ -1,0 +1,112 @@
+README zu  AGI_Reverse_Lookup_DACH
+
+Das Perl-Skript dient der Namensauflösung von Telefonnummern im Asterisk-Dialplan
+
+Versionsgeschichte:
+2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
+2014.04.02 LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
+2014.03.28.1 Initial
+
+Das Skript holt sich den Namen zur gegebenen Nummer, indem es diesen aus den Webseiten der Rückwärtssuche verschiedener Telefonnummernsuchanbieter extrahiert. Das ist jedoch noch nicht alles - das Skript kommt mit weiteren Features, die alle voll konfigurierbar sind:
+
+- Rückwärtssuche für Nummern aus Deutschland, Schweiz, Österreich
+- intelligentes Caching via Asterisk-eingebauter AstDB mit konfig. Verfallszeiträumen (expire)
+- zusätzliche Suche in einer eigenen AstDB-"Kundendatenbank"
+- Statistiken zu Cache- und Onlineabfragen
+
+----------------------------------------------------------------------------
+Implementierung des Reverse Lookup in den Asterisk-Dialplan
+----------------------------------------------------------------------------
+Das Skript kann auf einfache Weise in eine Extension der extensions.conf des Asterisk eingebaut werden:
+
+  exten =&gt; _X.,1,Verbose(1,${STRFTIME()} Reverse Lookup ${CALLERID(num)})
+   same =&gt; n,AGI(reverse_search.agi, ${CALLERID(num)})
+   same =&gt; n,Verbose(1,${STRFTIME()}- Ergebnis: ${RESULTREV})
+   same =&gt; n,Set(CALLERID(name)=${RESULTREV})
+   same =&gt; n,Dial(SIP/123)
+ 
+Den Pfad zu den AGI-Skripten findet man im übrigen in der asterisk.conf
+
+----------------------------------------------------------------------------
+Aufruf des Skriptes über die Shell
+----------------------------------------------------------------------------
+Zu Debuggingzwecken ist es nützlich, wenn man das Skript von der Shell aus aufrufen kann. Folgendes Kommando startet das AGI-Skript so, dass es durchläuft:
+
+while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1
+
+AGI-Aufrufe erwarten vor einem Abschluss eine Eingabe - daher das while-do-Konstrukt.
+Der erste Parameter ist die Rufnummer, der zweite schaltet das Caching ein und der dritte ermöglicht den Start über die Shell.
+
+----------------------------------------------------------------------------
+Konfigurationsparameter im Skript
+----------------------------------------------------------------------------
+Informationen zu den Parametern finden sich auch im Skript selbst.
+Hier noch einmal die Übersicht:
+
+    $vl = 1;
+		Verboselevel an der Asterisk-CLI unter dem die Ausgaben erfolgen
+
+	$countryprefix = "\\+";
+		Länderprefix der übergebenen Telefonnummern (meist "\\+" oder "00"
+
+    $use_klicktel = 0;
+		klicktel.de nutzen, wenn "Das Oertliche" nichts gefunden hat. Klicktel kann Einträge finden, die das Oertliche nicht findet, liefert aber ab und an auch Unsinn (besonders wenn es keine Nummer findet und dann eine "Ähnlichkeitssuche" macht
+
+	$cache = 1;
+		Caching nutzen
+    
+	$staticfamily = "";
+		wird hier ein Name angegeben, so wird in dieser AstDB-Datenbank (eigentlich: AstDB-Zweig oder -"family") über die Nummer als Key ein zugehöriger Name gesucht. In dieser Datenbank kann man z.B. Telefondaten der eigenen Kundendatenbank vorhalten. In dieser Datenbank wird stets zuerst gesucht.
+    
+	$cachefamily = "cidcache";
+		Name der Datenbank, die die zwischengespeicherten Nummern-Namen-Paare als Ergebnis älterer Suchen vorhält
+    
+	$cachetsfamily = "cidcachets";
+		Name der Datenbank, die Zeitstamps zu den in der Vergangenheit gesuchten Nummern enthält
+    
+	$statsfamily = "cidstats";
+		Name der Datenbank, in der Statistikdaten über den Cache und die Onlinesuchen gespeichert werden
+    
+	$f_expire = 365;
+		Zeitraum in Tagen, nach dem Ergebnisse erfolgreicher Rückwärtssuchen im Cache verfallen (einst gefundene Nummern werden dann nochmals gesucht). Ist der Wert 0, dann verfallen gefundene Nummern nie, es erfolgt also keine weitere Suche.
+    
+	$nf_expire = 60;
+		Zeitraum in Tagen, nach dem Ergebnisse erfolgloser Rückwärtssuchen im Cache verfallen (vormals online nicht gefundene Nummern werden dann nochmals gesucht). Ist der Wert 0, dann wird trotz erfolgloser Suche in der Vergangenheit stets noch einmal eine Onlinesuche versucht.
+    
+	$dont_delete_existing = 1;
+		Vorhandene Namenseinträge werden bei einer Aktualisierung (nach Verfallszeitraum) nicht gelöscht, wenn dann kein name mehr gefunden werden kann (z.B. weil die Nummer nicht mehr in der Rückwärtssuche gefunden wurde)
+    
+	$refresh_names_without_ts = 1;
+		Legt den Umgang mit Namenseinträgen fest, für die kein Zeitstempel exisiert.0=Zeitstempel wird auf die aktuelle Zeit gesetzt, bis zum Verfallsdatum wird keine neue Suche vorgenommen - 1=solche Namen werden exired gesetzt und online neu gesucht/aktualisiert
+    
+	$ua->timeout(3);
+		Timeout für die Online-Requests in Sekunden. Sollte nicht zu hoch eingestellt werden, damit der Dialplan nicht zu lange blockiert ist.
+    
+	$ua->agent('Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0)');
+		Bei den Onlineabfragen genutzer Useragent-String
+
+Hinweise: Wenn beide expire-Zeiten (f_expire & nf_expire) oben ungesetzt sind (=0), dann werden keinerlei Zeitstempel in der AstDB gespeichert! Doch keine Angst: Die AstDB ist recht leistungsfähig. In meiner Kundendatenbank auf dem Raspi befinden sich bspw. 15000 Einträge und es sind keinerlei Auswirkung auf die Zugriffen zu bemerken.
+
+----------------------------------------------------------------------------
+Statistiken
+----------------------------------------------------------------------------
+Werden per gesetztem "statsfamily" Statistikdaten zu den Abfragen gespeichert, so können diese folgendermaßen an der Asterisk-CLI abgerufen werden:
+
+database show cidstats
+
+Die daraufhin gelisteten Einträge gliedern sich in Bereiche mit folgenden Prefixen:
+
+    _static - fixe (staticfamily) Datenbank, in der gesucht wurde (z.B. Kundendatenbank)
+    _cache - Lokalsuche im Cache
+    DE-oert - Onlinesuchen auf das-oertliche.de
+    DE-klick - Onlinesuchen auf klicktel.de
+    AT-abc - Onlinesuchen auf telefonabc.at
+    CH-telsearch - Onlinesuchen auf tel.search.ch 
+
+Diese Bereiche haben gegebenenfalls Untereinträge mit folgenden Bezeichnungen:
+
+    hitfound - valider Fund, zugehöriger Name wurde gefunden
+    hitempty - Cache: Anzahl für gefundene Einträge, deren (zwischengespeicherte) Onlinesuche erfolglos war (d.h. im Web wurde damals kein Name gefunden) | Bei den Onlinesuchen steht hier die Anzahl der suchen ohne Erfolg (kein Eintrag gefunden)
+    miss - Cache: Kein Eintrag - Nicht gefunden | Online: Parsingfehler
+    expi - nur Cache: Verfallenen Eintrag gefunden
+    erro - nur Onlinesuche : Requesterror (Seitenaufruf fehlgeschlagen oder Timeout)
