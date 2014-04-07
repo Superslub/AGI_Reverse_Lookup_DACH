@@ -28,11 +28,24 @@ Das Skript kann auf einfache Weise in eine Extension der extensions.conf des Ast
 Den Pfad zu den AGI-Skripten findet man im übrigen in der asterisk.conf
 
 ----------------------------------------------------------------------------
+Aufrufparameter
+----------------------------------------------------------------------------
+<scriptname> number static cache luonline fromshell
+#   - number: die zu suchende Telefonnummer
+#   - static: Name der zu nutzenden Datenbank oder 0, um diese Suche zu unterbinden (überschreibt config)
+#   - cache:  Nutzung des Caches ein- (1) oder ausschalten (0) (überschreibt config)
+#   - luonline: Onlinesuche ein- (1) oder ausschalten (0) (überschreibt config)
+#   - fromshell: bei Start von der Shell sollte dieser Paraneter auf (1) gesetzt werden
+
+In der Regel erfolgt der Aufruf über Asterisk-AGI nur in der Form:
+<scriptname> number
+
+----------------------------------------------------------------------------
 Aufruf des Skriptes über die Shell
 ----------------------------------------------------------------------------
 Zu Debuggingzwecken ist es nützlich, wenn man das Skript von der Shell aus aufrufen kann. Folgendes Kommando startet das AGI-Skript so, dass es durchläuft:
 
-while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1
+while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1 1 1
 
 AGI-Aufrufe erwarten vor einem Abschluss eine Eingabe - daher das while-do-Konstrukt.
 Der erste Parameter ist die Rufnummer, der zweite schaltet das Caching ein und der dritte ermöglicht den Start über die Shell.
