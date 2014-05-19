@@ -1,8 +1,11 @@
-README zu  AGI_Reverse_Lookup_DACH
+﻿README zu  AGI_Reverse_Lookup_DACH
 
 Das Perl-Skript dient der Namensauflösung von Telefonnummern im Asterisk-Dialplan
 
 Versionsgeschichte:
+2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung behoben
+2014.04.11   Konfiguration mehrerer (kommaseparierter) statischer Datenbanken möglich
+2014.04.03   Rufnummernnormalisierung, neue Aufrufparameter
 2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
 2014.04.02 LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
 2014.03.28.1 Initial
@@ -14,6 +17,7 @@ Das Skript holt sich den Namen zur gegebenen Nummer, indem es diesen aus den Web
 - zusätzliche Suche in einer eigenen AstDB-"Kundendatenbank"
 - Statistiken zu Cache- und Onlineabfragen
 
+Um den Skriptaufruf zu beschleunigen, kann pperl oder perperl genutzt werden. Dafür einfach die erste Zeile des Skriptes entsprechend anpassen.
 ----------------------------------------------------------------------------
 Implementierung des Reverse Lookup in den Asterisk-Dialplan
 ----------------------------------------------------------------------------
@@ -25,7 +29,7 @@ Das Skript kann auf einfache Weise in eine Extension der extensions.conf des Ast
    same =&gt; n,Set(CALLERID(name)=${RESULTREV})
    same =&gt; n,Dial(SIP/123)
  
-Den Pfad zu den AGI-Skripten findet man im übrigen in der asterisk.conf
+Den Pfad zu den AGI-Skripten findet sich in der asterisk.conf
 
 ----------------------------------------------------------------------------
 Aufrufparameter
@@ -68,8 +72,8 @@ Hier noch einmal die Übersicht:
 	$cache = 1;
 		Caching nutzen
     
-	$staticfamily = "";
-		wird hier ein Name angegeben, so wird in dieser AstDB-Datenbank (eigentlich: AstDB-Zweig oder -"family") über die Nummer als Key ein zugehöriger Name gesucht. In dieser Datenbank kann man z.B. Telefondaten der eigenen Kundendatenbank vorhalten. In dieser Datenbank wird stets zuerst gesucht.
+	$staticfamilies = "";
+		werden hier ein oder mehrere (kommaseparierte) Name angegeben, so wird in dieser AstDB-Datenbank (eigentlich: AstDB-Zweig oder -"family") über die Nummer als Key ein zugehöriger Name gesucht. In dieser Datenbank kann man z.B. Telefondaten der eigenen Kundendatenbank vorhalten. In dieser Datenbank wird stets zuerst gesucht.
     
 	$cachefamily = "cidcache";
 		Name der Datenbank, die die zwischengespeicherten Nummern-Namen-Paare als Ergebnis älterer Suchen vorhält

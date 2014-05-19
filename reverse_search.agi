@@ -2,10 +2,14 @@
 # reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
 #
 # Version 
+# 2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung behoben
+# 2014.04.11   Konfiguration mehrerer (kommaseparierter) statischer Datenbanken möglich
 # 2014.04.03   Rufnummernnormalisierung, neue Aufrufparameter
 # 2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
 # 2014.04.02   LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
 # 2014.03.28.1 Initial
+#
+# http://sysout.twoday.net/stories/714914910
 #
 # Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
 #
@@ -16,24 +20,21 @@
 #
 #
 # Aufruf des Skriptes: 
-#  <script> number static cache luonline fromshell (für Aufrufe von der Shell)
+#        <script> number static cache luonline fromshell (für Aufrufe von der Shell)
 #   - number: die zu suchende Telefonnummer
 #   - static: Name der zu nutzenden Datenbank oder 0, um diese Suche zu unterbinden
 #   - cache:  Nutzung des Caches ein- (1) oder ausschalten (0)
-#   - luonline: Onlinesuche ein- (1) oder ausschalten (0)
-#   - fromshell: bei Start von der Shell sollte dieser Paraneter auf (1) gesetzt werden
-#
-# In der Regel erfolgt der Aufruf über Asterisk-AGI nur in der Form:
-#  <scriptname> number
+#   - luonline: Onlinesuche ein- (1) oder ausschalten (0) 
+#   - fromshell: bei Start vond er Shell sollte dieser Paraneter auf (1) gesetzt werden
 #
 # Die Suche funktioniert folgendermaßen:
-# - Zuerst wird in staticfamily nach einem Eintrag gesucht
+# - Zuerst wird in den fixen Datenbanken aus "staticfamilies" nach einem Eintrag gesucht
 # - dann wird im Cache ehemaliger Onlineabfragen gesucht
 # - dann wird online gesucht
 #
-# Wird online ein Eintrag gefunden, wird dieser im Cache [$cachefamily] gespeichert,
-# als auch ein zugehoeriger Zeiteintrag in [$cachetsfamily]
-# Das ermöglicht die Nutzung von Verfallsdaten für Einträge und außerdem können
+# Wird online ein Eintrag gefunden, wird dieser im Cache [$cachefamily] gespeichert
+# (und ein zugehoeriger Zeiteintrag in [$cachetsfamily])
+# Das ermöglicht die Nutzung von Verfallsdaten für Einträge und ausserdem können
 # entsprechende Einträge selektiv bereinigt werden, sollte das Script irgendwann
 # Unsinn in die Cachetabelle schreiben
 #
@@ -44,7 +45,7 @@
 #
 #
 # Aufruf an der Shell (Pfad zum Script anpassen):
-# while true; do echo " \n"; sleep 0.1; done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1 1 1
+# while true; do echo " \n"; sleep 0.1; done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1
 #
 # Viel Erfolg bei der Nutzung!
 
@@ -75,14 +76,14 @@ my $interprefix2  = "00";   # alternat. Zeichen, die internat. Nummern vorangest
 
 my $localprefix   = "0";    # welche Zeichen sind Ortsvorwahlnummern vorangestellt? Üblich: "0" 
 my $landesvorwahl = "49";   # eigener internationaler Landesvorwahlcode (OHNE $interprefix) - für DE "49", AT "43", CH "41"
-my $ortsvorwahl   = "030";  # eigene (nationale) Ortsvorwahl (muss mit localprefix beginnen!), z.B. "030" für Berlin
+my $ortsvorwahl   = "030";  # eigene (nationale)Ortsvorwahl (muss MIT localprefix beginnen!), z.B. "030" für Berlin
 
 # Einstellunge Suche/Cache/Datenbank
 my $luonline      = 1;      # Nummer Online suchen, kann auch über Startparameter gesetzt werden
 my $usecache      = 1;      # Cache für Onlinesuchen nutzen, kann auch über Startparameter gesetzt werden
 my $use_klicktel  = 0;      # Klicktel-Onlinesuche nutzen (hat unscharfe Suche und liefert daher oft auch falsche Namen
 
-my $staticfamily  = "cidname"; # AstDB family von fix gespeichert Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
+my $staticfamilies= ""; # AstDB-families (kommasepariert) von fix gespeicherten Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
 my $cachefamily   = "cidcache";# AstDB family der gespeicherten reverse lookups 
 my $cachetsfamily = "cidcachets"; #AstDB family der timestamps zu  den eintraegen in cachefamily 
 my $statsfamily   = "cidstats";# AstDB family der Statisticdatentabelle - (leer = Statistiken ausgeschaltet)
@@ -95,7 +96,7 @@ my $refresh_names_without_ts = 1; # Einträge ohne Zeitstempel via online aktual
 
 # Einstellung Sitescraper
 my $ua = LWPx::ParanoidAgent->new();
-   $ua->timeout(3);            # Absolutes Timeout (LWPx!) für die Online-Requests in Sekunden
+   $ua->timeout(5);            # Absolutes Timeout (LWPx!) für die Online-Requests in Sekunden
    $ua->agent('Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0) Opera 12.14'); # Useragentstring
 
 # Ende Konfiguration
@@ -112,7 +113,7 @@ $AGI->verbose("RS:        number = (${number})", $vl+1);
 $AGI->verbose("RS:  interprefix1 = (${interprefix1})", $vl+1);
 $AGI->verbose("RS:  interprefix2 = (${interprefix2})", $vl+1);
 $AGI->verbose("RS:  use_klicktel = (${use_klicktel})", $vl+1);
-$AGI->verbose("RS:  staticfamily = (${staticfamily})", $vl+1);
+$AGI->verbose("RS:staticfamilies = (${staticfamilies})", $vl+1);
 $AGI->verbose("RS:   cachefamily = (${cachefamily})", $vl+1);
 $AGI->verbose("RS: cachetsfamily = (${cachetsfamily})", $vl+1);
 $AGI->verbose("RS:      f_expire = (${f_expire}) days", $vl+1);
@@ -133,8 +134,8 @@ if (! $ARGV[0]) { #number
 }
 
 if (defined $ARGV[1]) { #set use of static DB
-    $staticfamily = $ARGV[1] eq "0" ? "" : $ARGV[1] eq "1" ? $staticfamily : $ARGV[1];
-    $AGI->verbose("RS: ARGV Staticsearch set: ".($staticfamily eq "" ? "OFF" : $staticfamily), $vl);
+    $staticfamilies = $ARGV[1] eq "0" ? "" : $ARGV[1] eq "1" ? $staticfamilies : $ARGV[1];
+    $AGI->verbose("RS: ARGV Staticsearch set: ".($staticfamilies eq "" ? "OFF" : $staticfamilies), $vl);
 }
 
 if (defined $ARGV[2]) { #use cache
@@ -184,20 +185,27 @@ $AGI->verbose("RS:       country = (${country})", $vl+1);
 
 my $i = 0;
 
-    # in der fixen Datenbank suchen
-    if ($staticfamily){ # wenn Datenbank konfiguriert ist
-        my $astdbstaticget = $AGI->database_get($staticfamily, $number);
-        if($astdbstaticget) {
-            $AGI->verbose("RS: Staticsearch(0): Name found in [${staticfamily}] - (${astdbstaticget})", $vl);
-            $AGI->set_variable("RESULTREV", $astdbstaticget);
-            addstats("_static",1,0,0,0,0);
-            exit;
-        }else{
-            $AGI->verbose("RS: Staticsearch(1): Name not found in [${staticfamily}]", $vl);
-            addstats("_static",0,0,1,0,0);
+    # in den fixen Datenbanken suchen
+    if ($staticfamilies){ # wenn Datenbanken konfiguriert sind
+    
+        # my @dbs = split(',', $staticfamilies);
+        my $dbi = 1; #Zähler
+        foreach my $db (split(',', $staticfamilies)) {
+            
+            my $astdbstaticget = $AGI->database_get($db,"\"${number}\"");
+            if($astdbstaticget) {
+                $AGI->verbose("RS: Staticsearch(0-[${dbi}]): Name found in [${db}] - (${astdbstaticget})", $vl);
+                $AGI->set_variable("RESULTREV", $astdbstaticget);
+                addstats("_static${dbi}",1,0,0,0,0);
+                exit;
+            }else{
+                $AGI->verbose("RS: Staticsearch(1-[${dbi}]): Name not found in [${db}]", $vl);
+                addstats("_static${dbi}",0,0,1,0,0);
+            }
+            $dbi++;
         }
-    }else{ # fixe Datenbank ist nicht konfiguriert
-        $AGI->verbose("RS: Staticsearch(3): DB not configured or deactivated", $vl);
+    }else{ # fixe Datenbanken sind nicht konfiguriert
+        $AGI->verbose("RS: Staticsearch(3): DBs not configured or deactivated", $vl);
     }
 
     # im Cache suchen - im wesentlichen expireverwaltung
@@ -242,7 +250,7 @@ my $i = 0;
                     reverselookup();
                 }
             }else{ # kein zeitstempeleintrag gefunden
-                $AGI->verbose("RS: Cachesearch(5): Name/TS-Entry not found -> search online", $vl);
+                $AGI->verbose("RS: Cachesearch(5): Name/TS-Entry not found -> search online".$number, $vl);
                 addstats("_cache",0,0,1,0,0);
                 reverselookup();
             }
@@ -291,7 +299,7 @@ my $i = 0;
         $AGI->verbose("RS: Cache not enabled - Do uncached reverse lookup (online)", $vl);
         if($luonline){ # Onlinesuche aktiviert
             reverselookup();
-            if( defined $reverseresult) {
+            if( defined $reverseresult && $reverseresult) {
                 $AGI->verbose("RS: Onlinesearch(6): Name found - \"${reverseresult}\"", $vl);
                 $AGI->set_variable("RESULTREV", $reverseresult);
                 exit;
