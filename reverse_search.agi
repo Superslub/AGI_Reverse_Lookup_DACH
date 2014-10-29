@@ -2,14 +2,13 @@
 # reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
 #
 # Version 
+# 2014.10.29   Grabbing bei oert und klick aktualisiert (Dank an Schnappatmer)
 # 2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung behoben
 # 2014.04.11   Konfiguration mehrerer (kommaseparierter) statischer Datenbanken möglich
 # 2014.04.03   Rufnummernnormalisierung, neue Aufrufparameter
 # 2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
 # 2014.04.02   LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
 # 2014.03.28.1 Initial
-#
-# http://sysout.twoday.net/stories/714914910
 #
 # Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
 #
@@ -357,7 +356,7 @@ sub oert {
         if (defined $html ) {
             $reverseresult = $html->look_down(
             _tag => 'a',
-            class => 'preview iname');
+            class => 'name ');
             if (defined $reverseresult ) {
                 $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
                 $AGI->verbose("RS: oert(online) Gefunden: [".$reverseresult."]", $vl);
@@ -390,12 +389,12 @@ sub klick {
         my $tree = HTML::TreeBuilder->new_from_content( $response->content );
 
         if (defined $tree ) {
-            my $e = $tree->look_down(_tag => 'div', class => 'results direct');
+            my $e = $tree->look_down(_tag => 'div', class => 'headerContainer');
             if(defined $e){
                 $reverseresult = $e->look_down(_tag => 'a');
 
                 if ( $reverseresult ) {
-                    $reverseresult = substr($reverseresult->as_trimmed_text(extra_chars => '\xA0'),3);
+                    $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
                     $AGI->verbose("RS: klick(online) Gefunden: [".$reverseresult."]", $vl);
                     addstats("DE-klick",1,0,0,0,0); # hit
                 } else {
