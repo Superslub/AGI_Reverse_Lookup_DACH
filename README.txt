@@ -1,6 +1,7 @@
 ﻿README zu  AGI_Reverse_Lookup_DACH
 
-Das Perl-Skript dient der Namensauflösung von Telefonnummern im Asterisk-Dialplan
+Das Perl-Skript dient der Namensauflösung von Telefonnummern (Rückwärtssuche) im Asterisk-Dialplan
+Unterstützt derzeit Deutschland (D), Österreich (A), Schweiz (CH) und Italien (IT)
 
 Versionsgeschichte:
 2016.06.07   Parserskripte neu angepasst, Rückwärtssuche Italien eingebaut (Dank an AAG) / Bash-Parserfehler-Überwachungsskript check.bash (z.B. als Cronjob)
