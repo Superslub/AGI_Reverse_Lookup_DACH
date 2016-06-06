@@ -1,14 +1,8 @@
 #!/usr/bin/perl
-# reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
+# reverse lookup / Rückwärtssuche für de,at,ch,it Nummern im Asterisk-Dialplan.
 #
-# Version 
-# 2014.10.29   Grabbing bei oert und klick aktualisiert (Dank an Schnappatmer)
-# 2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung behoben
-# 2014.04.11   Konfiguration mehrerer (kommaseparierter) statischer Datenbanken möglich
-# 2014.04.03   Rufnummernnormalisierung, neue Aufrufparameter
-# 2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
-# 2014.04.02   LWPx::ParanoidAgent mit "echtem" Timeout; Verbesserte Fehlererkennung (Seitenfehler Onlineabfrage)
-# 2014.03.28.1 Initial
+# Version 2016.06.07 
+#
 #
 # Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
 #
@@ -44,7 +38,7 @@
 #
 #
 # Aufruf an der Shell (Pfad zum Script anpassen):
-# while true; do echo " \n"; sleep 0.1; done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1
+# while true; do echo " \n"; sleep 0.1; done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 0 0 1 1
 #
 # Viel Erfolg bei der Nutzung!
 
@@ -59,7 +53,7 @@ use String::Util 'trim';
 use HTML::TreeBuilder 5 -weak; # parses the html page, debian sid unstable: libhtml-tree-perl
 use URI::Escape;
 use Encode;
-use LWPx::ParanoidAgent;
+use LWPx::ParanoidAgent; #cpan install "LWPx::ParanoidAgent"
 
 ######################################################################################
 # Konfiguration
@@ -82,15 +76,15 @@ my $luonline      = 1;      # Nummer Online suchen, kann auch über Startparamet
 my $usecache      = 1;      # Cache für Onlinesuchen nutzen, kann auch über Startparameter gesetzt werden
 my $use_klicktel  = 0;      # Klicktel-Onlinesuche nutzen (hat unscharfe Suche und liefert daher oft auch falsche Namen
 
-my $staticfamilies= ""; # AstDB-families (kommasepariert) von fix gespeicherten Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
+my $staticfamilies= "";     # AstDB-families (kommasepariert) von fix gespeicherten Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
 my $cachefamily   = "cidcache";# AstDB family der gespeicherten reverse lookups 
 my $cachetsfamily = "cidcachets"; #AstDB family der timestamps zu  den eintraegen in cachefamily 
 my $statsfamily   = "cidstats";# AstDB family der Statisticdatentabelle - (leer = Statistiken ausgeschaltet)
 my $f_expire      = 365;    # Tage, nach denen existierender Cache-Eintrag online neu gesucht wird - (0 = nie)
 my $nf_expire     = 30;     # Tage, nach denen eine nicht-gefundene Nummer nochmals online gesucht wird - (0 = jedesmal)
-                             # wenn beide expire-Zeiten 0 sind, dann werden keine Zeitstempel gespeichert!
+                            # wenn beide expire-Zeiten 0 sind, dann werden keine Zeitstempel gespeichert!
                                
-my $dont_delete_existing = 1;  # wenn gesetzt, werden keine Expired-Cachenames mit Leernamen (=nicht mehr online zu finden) ersetzt 
+my $dont_delete_existing = 1;  # wenn gesetzt, werden keine Expired-Cachenames mit Leernamen (=in Datenbank, aber nicht mehr online zu finden) ersetzt 
 my $refresh_names_without_ts = 1; # Einträge ohne Zeitstempel via online aktualisieren? (nein = Zeitstempel wird auf aktuelle Zeit gesetzt) (Abwärtskompatibilität)
 
 # Einstellung Sitescraper
@@ -148,6 +142,7 @@ if (defined $ARGV[3]) { #lookup online
 }
 
 if (!defined $ARGV[4]) { #Aufruf von der Shell
+    $AGI->verbose("RS: ARGV Start from Shell: OFF - for Shell-starting use commanline parameter!", $vl); 
     # nur wenn kein 5. Parameter angegeben ist, dann inputpasrsing (an der Shell funktioniert das nicht)
     my %input = $AGI->ReadParse(); # AGI Eingabeverarbeitung
 }else{
@@ -178,6 +173,7 @@ my $country = $cp;
 if($cp eq '49'){ $country = 'DE';}
 elsif($cp eq '43'){ $country = 'AT';}
 elsif($cp eq '41'){ $country = 'CH';}
+elsif($cp eq '39'){ $country = 'IT';}
 
 $AGI->verbose("RS:   number(std) = (${number})",  $vl+1);
 $AGI->verbose("RS:       country = (${country})", $vl+1);
@@ -324,7 +320,9 @@ my $i = 0;
 sub reverselookup {
     $reverseresult = undef;
     if($luonline){
-        if ($country eq "AT") {
+        if ($country eq "IT") {
+            paginebianche($number);
+        } elsif ($country eq "AT") {
             telefonabc($number);
         } elsif ($country eq "CH") {
             telsearch($number);
@@ -360,7 +358,6 @@ sub oert {
             if (defined $reverseresult ) {
                 $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
                 $AGI->verbose("RS: oert(online) Gefunden: [".$reverseresult."]", $vl);
-                #$AGI->set_variable("RESULTREV", $reverseresult);
                 addstats("DE-oert",1,0,0,0,0); # hit
             } else {
                 $reverseresult = "";
@@ -383,18 +380,25 @@ sub oert {
 sub klick {
     $AGI->verbose("RS: Onlinesearch (klick):".$number, $vl); 
     $reverseresult  = undef;
-    $url = "http://www.klicktel.de/rueckwaertssuche/".uri_escape($number);
+    $url = "https://www.klicktel.de/suche/".uri_escape($number);
+	$ua->ssl_opts( verify_hostnames => 0 ,SSL_verify_mode => 0x00);
     $response = $ua->get($url);
     if($response->is_success && length($response->content) > 5000){ # Laenge wegen T-Online "Navigationshilfe" o.ä.){
         my $tree = HTML::TreeBuilder->new_from_content( $response->content );
 
         if (defined $tree ) {
-            my $e = $tree->look_down(_tag => 'div', class => 'headerContainer');
+            my $e = $tree->look_down(_tag => 'div', class => 'entry-item');
             if(defined $e){
-                $reverseresult = $e->look_down(_tag => 'a');
+			
+                $reverseresult = $e->look_down(
+				_tag => 'h1',
+				class => 'title',
+				'itemprop' => 'name'
+				);
 
                 if ( $reverseresult ) {
-                    $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
+				    $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
+                    #$reverseresult = substr($reverseresult->as_trimmed_text(extra_chars => '\xA0'),3);
                     $AGI->verbose("RS: klick(online) Gefunden: [".$reverseresult."]", $vl);
                     addstats("DE-klick",1,0,0,0,0); # hit
                 } else {
@@ -429,10 +433,13 @@ sub telefonabc {
         my $html = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $response->content())));
         if ( defined $html ) {
             $reverseresult = $html->look_down(
-#            _tag => 'span',
-#            class => 'given-name');
             _tag => 'a',
             class => 'h_green');
+			$reverseresult = $html->look_down(
+            #_tag => 'h3',
+            #class => 'card-heading pull-left',
+			'itemprop'=>'name');
+			
             if (defined $reverseresult ) {
                 $reverseresult = $reverseresult->as_trimmed_text;
                 addstats("AT-tabc",1,0,0,0,0); # hit
@@ -466,12 +473,13 @@ sub telsearch {
     $url = "http://tel.search.ch/?was=".uri_escape($number);
     $response = $ua->get($url);
     if($response->is_success && length($response->content) > 5000){
-        my $html = HTML::TreeBuilder->new_from_content ( $response->content );
+		my $html = HTML::TreeBuilder->new_from_content ( $response->content );
         if ( defined $html ) {
             $reverseresult = $html->look_down(
+	
             _tag => 'a',
-            class => qr/^(?:fn org|fn)$/);
-        
+            "data-stats" => qr/.+/);  # regulärer Ausdruck für "so ziemlich Alles"
+			
             if (defined $reverseresult ) {
                 $reverseresult = $reverseresult->as_trimmed_text;
                 addstats("CH-tels",1,0,0,0,0); # hit
@@ -487,6 +495,44 @@ sub telsearch {
     }else{
         $AGI->verbose("RS: telsearch(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
         addstats("CH-tels",0,0,0,0,1); # error - Requesterror
+    }
+}
+
+## Italian numbers (IT) +39 ## thx AAG
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
+# e.g. www.paginebianche.it/eng/ricerca-da-numero?qs=038229693 
+
+sub paginebianche {
+    $AGI->verbose("RS: Onlinesearch (paginebianche):".$number, $vl); 
+    $reverseresult = undef;
+	$number =  substr $number, 3;
+    $url = "http://www.paginebianche.it/eng/ricerca-da-numero?qs=".uri_escape($number);
+    $response = $ua->get($url);
+    if($response->is_success && length($response->content) > 5000){
+        my $html = HTML::TreeBuilder->new_from_content ( $response->content );
+        if ( defined $html ) {
+			
+			$reverseresult = $html->look_down(
+				_tag => 'h2',
+				class => 'rgs'
+			);
+			
+			if (defined $reverseresult ) {
+                $reverseresult = $reverseresult->as_trimmed_text;
+                addstats("IT-pag",1,0,0,0,0); # hit
+            } else {
+                $reverseresult = "";
+                $AGI->verbose("RS: paginebianche(online): Nummer nicht gefunden", $vl);
+                addstats("IT-pag",0,1,0,0,0); # empty hit
+            }
+        } else {
+            $AGI->verbose("RS: paginebianche(online): Treebuilder cannot read page!", $vl);
+            addstats("IT-pag",0,0,1,0,0); # miss - Parsingfehler
+        }
+    }else{
+        $AGI->verbose("RS: paginebianche(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
+        addstats("IT-pag",0,0,0,0,1); # error - Requesterror
     }
 }
 

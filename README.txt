@@ -3,7 +3,10 @@
 Das Perl-Skript dient der Namensauflösung von Telefonnummern im Asterisk-Dialplan
 
 Versionsgeschichte:
+2016.06.07   Parserskripte neu angepasst, Rückwärtssuche Italien eingebaut (Dank an AAG) / Bash-Parserfehler-Überwachungsskript check.bash (z.B. als Cronjob)
 2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung behoben
+2014.10.29   Grabbing bei oert und klick aktualisiert (Dank an Schnappatmer)
+2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung 
 2014.04.11   Konfiguration mehrerer (kommaseparierter) statischer Datenbanken möglich
 2014.04.03   Rufnummernnormalisierung, neue Aufrufparameter
 2014.04.02.1 Verbesserte Fehlererkennung ("Navigationshilfen" bei DNS-Fehler), Prüfung Response-Content-Länge
@@ -18,6 +21,17 @@ Das Skript holt sich den Namen zur gegebenen Nummer, indem es diesen aus den Web
 - Statistiken zu Cache- und Onlineabfragen
 
 Um den Skriptaufruf zu beschleunigen, kann pperl oder perperl genutzt werden. Dafür einfach die erste Zeile des Skriptes entsprechend anpassen.
+
+
+----------------------------------------------------------------------------
+Überwachung der Grabbing-Funktionalität
+----------------------------------------------------------------------------
+Änderungen an der Webseite eines Rückwärtssuchen-Anbieters führen zu einem
+Versagen des entsprechenden Rufnummern-Grabbers, der diese Webseite durchsucht.
+Das Skript check.bash ermöglicht eine regelmäßige Prüfung der Skript-Funktionalität
+und schickt im Fehlerfall eine E-Mail an eine konfigurierbare Adresse
+
+
 ----------------------------------------------------------------------------
 Implementierung des Reverse Lookup in den Asterisk-Dialplan
 ----------------------------------------------------------------------------
@@ -51,8 +65,13 @@ Zu Debuggingzwecken ist es nützlich, wenn man das Skript von der Shell aus aufr
 
 while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1 1 1
 
-AGI-Aufrufe erwarten vor einem Abschluss eine Eingabe - daher das while-do-Konstrukt.
-Der erste Parameter ist die Rufnummer, der zweite schaltet das Caching ein und der dritte ermöglicht den Start über die Shell.
+oder, um ausschließlich die Onlinesuchen zu prüfen (ohne Caches und Datenbanken)
+
+while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 0 0 1 1
+
+(AGI-Aufrufe erwarten vor einem Abschluss eine Eingabe - daher das while-do-Konstrukt)
+
+
 
 ----------------------------------------------------------------------------
 Konfigurationsparameter im Skript
@@ -118,7 +137,8 @@ Die daraufhin gelisteten Einträge gliedern sich in Bereiche mit folgenden Prefi
     DE-oert - Onlinesuchen auf das-oertliche.de
     DE-klick - Onlinesuchen auf klicktel.de
     AT-abc - Onlinesuchen auf telefonabc.at
-    CH-telsearch - Onlinesuchen auf tel.search.ch 
+    CH-telsearch - Onlinesuchen auf tel.search.ch
+	IT-pag - Onlinesuche über paginebianche.it
 
 Diese Bereiche haben gegebenenfalls Untereinträge mit folgenden Bezeichnungen:
 
