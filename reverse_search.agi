@@ -74,7 +74,7 @@ my $ortsvorwahl   = "030";  # eigene (nationale)Ortsvorwahl (muss MIT localprefi
 # Einstellunge Suche/Cache/Datenbank
 my $luonline      = 1;      # Nummer Online suchen, kann auch über Startparameter gesetzt werden
 my $usecache      = 1;      # Cache für Onlinesuchen nutzen, kann auch über Startparameter gesetzt werden
-my $use_klicktel  = 0;      # Klicktel-Onlinesuche nutzen (hat unscharfe Suche und liefert daher oft auch falsche Namen
+my $use_klicktel  = 0;      # Klicktel-Onlinesuche nutzen (hat unscharfe Suche und liefert daher oft auch falsche Namen)
 
 my $staticfamilies= "";     # AstDB-families (kommasepariert) von fix gespeicherten Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
 my $cachefamily   = "cidcache";# AstDB family der gespeicherten reverse lookups 
@@ -181,7 +181,7 @@ $AGI->verbose("RS:       country = (${country})", $vl+1);
 my $i = 0;
 
     # in den fixen Datenbanken suchen
-    if ($staticfamilies){ # wenn Datenbanken konfiguriert sind
+    if ($staticfamilies){ # wenn Benutzer-Datenbanken konfiguriert sind
     
         # my @dbs = split(',', $staticfamilies);
         my $dbi = 1; #Zähler
@@ -417,7 +417,7 @@ sub klick {
         }
     }else{
         $AGI->verbose("RS: klick(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line,2);
-        addstats("DE-kick",0,0,0,0,1); # error - Requesterror
+        addstats("DE-klick",0,0,0,0,1); # error - Requesterror
     }
 }
 
