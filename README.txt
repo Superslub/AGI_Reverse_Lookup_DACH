@@ -38,11 +38,11 @@ Implementierung des Reverse Lookup in den Asterisk-Dialplan
 ----------------------------------------------------------------------------
 Das Skript kann auf einfache Weise in eine Extension der extensions.conf des Asterisk eingebaut werden:
 
-  exten =&gt; _X.,1,Verbose(1,${STRFTIME()} Reverse Lookup ${CALLERID(num)})
-   same =&gt; n,AGI(reverse_search.agi, ${CALLERID(num)})
-   same =&gt; n,Verbose(1,${STRFTIME()}- Ergebnis: ${RESULTREV})
-   same =&gt; n,Set(CALLERID(name)=${RESULTREV})
-   same =&gt; n,Dial(SIP/123)
+  exten => _X.,1,Verbose(1,${STRFTIME()} Reverse Lookup ${CALLERID(num)})
+   same => n,AGI(reverse_search.agi, ${CALLERID(num)})
+   same => n,Verbose(1,${STRFTIME()}- Ergebnis: ${RESULTREV})
+   same => n,Set(CALLERID(name)=${RESULTREV})
+   same => n,Dial(SIP/123)
  
 Den Pfad zu den AGI-Skripten findet sich in der asterisk.conf
 
