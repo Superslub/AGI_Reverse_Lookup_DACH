@@ -4,6 +4,7 @@ Das Perl-Skript dient der Namensauflösung von Telefonnummern (Rückwärtssuche)
 Unterstützt derzeit Deutschland (D), Österreich (A), Schweiz (CH) und Italien (IT)
 
 Versionsgeschichte:
+2016.07.07   Fix Suche Italien (fehlende vorangestellte Null bei Argumente Seitenaufruf)
 2016.06.07   Parserskripte neu angepasst, Rückwärtssuche Italien eingebaut (Dank an AAG) / Bash-Parserfehler-Überwachungsskript check.bash (z.B. als Cronjob)
 2014.05.19   Kleiner Bug bei Ausgabe online nicht gefunden ohne Cachenutzung behoben
 2014.10.29   Grabbing bei oert und klick aktualisiert (Dank an Schnappatmer)
