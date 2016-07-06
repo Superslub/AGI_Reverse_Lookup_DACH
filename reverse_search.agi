@@ -506,7 +506,7 @@ sub telsearch {
 sub paginebianche {
     $AGI->verbose("RS: Onlinesearch (paginebianche):".$number, $vl); 
     $reverseresult = undef;
-	$number =  substr $number, 3;
+	$number =  "0".(substr $number, 3);
     $url = "http://www.paginebianche.it/eng/ricerca-da-numero?qs=".uri_escape($number);
     $response = $ua->get($url);
     if($response->is_success && length($response->content) > 5000){
