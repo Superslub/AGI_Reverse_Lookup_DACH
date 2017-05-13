@@ -1,7 +1,10 @@
-#!/usr/bin/perl
+#!/usr/bin/perl 
+# Achtung: Leerzeichen hinter "#!/usr/bin/perl "
+# ansonsten kommt es zu einem "no such file or directory"-Fehler!
+#
 # reverse lookup / Rückwärtssuche für de,at,ch,it Nummern im Asterisk-Dialplan.
 #
-# Version 2016.06.07 
+# Version 2017.05.13
 #
 #
 # Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
@@ -174,6 +177,7 @@ if($cp eq '49'){ $country = 'DE';}
 elsif($cp eq '43'){ $country = 'AT';}
 elsif($cp eq '41'){ $country = 'CH';}
 elsif($cp eq '39'){ $country = 'IT';}
+elsif($cp eq '33'){ $country = 'FR';}
 
 $AGI->verbose("RS:   number(std) = (${number})",  $vl+1);
 $AGI->verbose("RS:       country = (${country})", $vl+1);
@@ -326,6 +330,8 @@ sub reverselookup {
             telefonabc($number);
         } elsif ($country eq "CH") {
             telsearch($number);
+        } elsif ($country eq "FR") {
+            pagesblanches( $number );
         } elsif ($country eq "DE") {
             oert($number);
         	if(! $reverseresult && $use_klicktel){
@@ -501,8 +507,7 @@ sub telsearch {
 ## Italian numbers (IT) +39 ## thx AAG
 # muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
-# e.g. www.paginebianche.it/eng/ricerca-da-numero?qs=038229693 
-
+# e.g. www.paginebianche.it/eng/ricerca-da-numero?qs=038229693
 sub paginebianche {
     $AGI->verbose("RS: Onlinesearch (paginebianche):".$number, $vl); 
     $reverseresult = undef;
@@ -536,8 +541,41 @@ sub paginebianche {
     }
 }
 
+## French numbers (IT) +33 ##
+# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
+# im Fehlerfall wird $reversesearch undefiniert gesetzt
+# http://www.pagesjaunes.fr/annuaireinverse/recherche?quoiqui=0102030405&proximite=0
+sub pagesblanches {
+    $AGI->verbose( "RS: Onlinesearch (pagesblanches):" . $number, $vl );
+    $reverseresult = undef;
+    $number        = "0" . ( substr $number, 3 );
+    $url           = "http://www.pagesjaunes.fr/annuaireinverse/recherche?quoiqui=" . uri_escape( $number ) . "&proximite=0";
+    $response      = $ua->get( $url );
+    if ( $response->is_success && length( $response->content ) > 5000 ) {
+        my $html = HTML::TreeBuilder->new_from_content( $response->content );
+        if ( defined $html ) {
+            $reverseresult = $html->look_down( _tag  => 'a',
+                                               class => 'denomination-links pj-lb pj-link' );
 
-# arg[0] = Subject , z.B. _static, _cache, DE-oert, DE-klick, AT-abc, CH-telsearch
+            if ( defined $reverseresult ) {
+                $reverseresult = $reverseresult->as_trimmed_text;
+                addstats( "FR-pag", 1, 0, 0, 0, 0 );    # hit
+            } else {
+                $reverseresult = "";
+                $AGI->verbose( "RS: pagesblanches(online): Nummer nicht gefunden", $vl );
+                addstats( "FR-pag", 0, 1, 0, 0, 0 );    # empty hit
+            }
+        } else {
+            $AGI->verbose( "RS: pagesblanches(online): Treebuilder cannot read page!", $vl );
+            addstats( "FR-pag", 0, 0, 1, 0, 0 );        # miss - Parsingfehler
+        }
+    } else {
+        $AGI->verbose( "RS: pagesblanches(online): HTTP-Request failed (" . length( $response->content ) . "): " . $response->status_line, $vl );
+        addstats( "FR-pag", 0, 0, 0, 0, 1 );            # error - Requesterror
+    }
+}
+
+# arg[0] = Subject , z.B. _static, _cache, DE-oert, DE-klick, AT-abc, CH-telsearch, IT-pag, FR-pag
 # arg[1] = Hits to add              [hitfound]  valider Fund, Name gefunden
 # arg[2] = Hits (empty) to add      [hitempty]  Online: Not found - Cache: gefunden, aber gespeichert war eine erfolglose Suche (kein Name)
 # arg[3] = Misses to add            [miss]      Online: Parsingfehler - Cache: Kein Eintrag - Nicht gefunden
