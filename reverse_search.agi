@@ -359,8 +359,8 @@ sub oert {
 #        if (( 1 == 2 ) && ( defined $htmloert )) {
         if (defined $html ) {
             $reverseresult = $html->look_down(
-            _tag => 'a',
-            class => 'name ');
+            _tag => 'span',
+            class => 'st-treff-name');
             if (defined $reverseresult ) {
                 $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
                 $AGI->verbose("RS: oert(online) Gefunden: [".$reverseresult."]", $vl);
