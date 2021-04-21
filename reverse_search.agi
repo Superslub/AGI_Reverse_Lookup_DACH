@@ -157,16 +157,16 @@ $nf_expire = $nf_expire * 86400; # umrechnen in Sekunden
 
 # Nummer normalisieren
 
-# wenn Nummer mit interprefix2 beginnt, dieses durch interprefix1 ersetzen
-if($interprefix2 && (substr($number,0,length($interprefix2)) eq $interprefix2)){
-   	$number = $interprefix1.substr($number,length($interprefix2));
+# wenn Nummer mit interprefix1 beginnt, dieses durch interprefix2 ersetzen
+if($interprefix1 && (substr($number,0,length($interprefix1)) eq $interprefix1)){
+    $number = $interprefix2.substr($number,length($interprefix1));
 }
 
-if(!($interprefix1 && (substr($number,0,length($interprefix1)) eq $interprefix1))){ # Nummer ohne interpref(z.B. 030123456)
+if(!($interprefix2 && (substr($number,0,length($interprefix2)) eq $interprefix2))){ # Nummer ohne interpref(z.B. 030123456)
     if(substr($number,0,length($localprefix)) eq $localprefix){ # Nummer mit Ortsvorwahl (z.B. 0301234567)
-	   	$number = $interprefix1.$landesvorwahl.substr($number,length($localprefix));
+        $number = $interprefix2.$landesvorwahl.substr($number,length($localprefix));
     } else { # Nummern ohne Ortsvorwahl (z.B. 1234567)
-        $number = $interprefix1.$landesvorwahl.substr($ortsvorwahl,length($localprefix)).$number;
+        $number = $interprefix2.$landesvorwahl.substr($ortsvorwahl,length($localprefix)).$number;
     }
 }
 
