@@ -171,7 +171,7 @@ if(!($interprefix2 && (substr($number,0,length($interprefix2)) eq $interprefix2)
 }
 
 # Land bestimmen
-my $cp = substr($number,length($interprefix1),2);
+my $cp = substr($number,length($interprefix2),2);
 my $country = $cp;
 if($cp eq '49'){ $country = 'DE';}
 elsif($cp eq '43'){ $country = 'AT';}
