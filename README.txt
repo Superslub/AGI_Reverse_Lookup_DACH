@@ -4,6 +4,7 @@ Das Perl-Skript dient der Namensauflösung von Telefonnummern (Rückwärtssuche)
 Unterstützt derzeit Deutschland (D), Österreich (A), Schweiz (CH), Italien (IT), Frankreich (FR)
 
 Versionsgeschichte:
+2024.06.08   Gefixt: Ländervorwahl-Bug (Dank an Dagobert), GET mit mechanize, Scraping via XPath, Aktualisiert: oert, klick (jetzt 11880), herold (AT)
 2021.04.21   ReverseSearch für "Das Örtliche" gefixt (Twilight-Networks) / Frankreich hinzugefügt (psychedelys)
 2021.03.24   ReverseSearch für "Das Örtliche" gefixt (Twilight-Networks)
 2017.05.13   Leerzeichen hinter einführendes "#!/usr/bin/perl " - sonst Fehlermeldung "no such file or directory" im Asterisk
@@ -48,7 +49,7 @@ Das Skript kann auf einfache Weise in eine Extension der extensions.conf des Ast
    same => n,Set(CALLERID(name)=${RESULTREV})
    same => n,Dial(SIP/123)
  
-Den Pfad zu den AGI-Skripten findet sich in der asterisk.conf
+Der Pfad zu den AGI-Skripten findet sich in der asterisk.conf
 
 ----------------------------------------------------------------------------
 Aufrufparameter
@@ -68,14 +69,13 @@ Aufruf des Skriptes über die Shell
 ----------------------------------------------------------------------------
 Zu Debuggingzwecken ist es nützlich, wenn man das Skript von der Shell aus aufrufen kann. Folgendes Kommando startet das AGI-Skript so, dass es durchläuft:
 
-while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1 1 1
+while true;do echo " \n";sleep 0.01;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 1 1 1 1
 
-oder, um ausschließlich die Onlinesuchen zu prüfen (ohne Caches und Datenbanken)
+oder, um ausschließlich die Onlinesuchen zu prüfen (ohne Caches und Datenbanken):
 
-while true;do echo " \n";sleep 0.1;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 0 0 1 1
+while true;do echo " \n";sleep 0.01;done | sudo perl /usr/share/asterisk/agi-bin/reverse_search.agi +49123456789 0 0 1 1
 
 (AGI-Aufrufe erwarten vor einem Abschluss eine Eingabe - daher das while-do-Konstrukt)
-
 
 
 ----------------------------------------------------------------------------
@@ -84,14 +84,14 @@ Konfigurationsparameter im Skript
 Informationen zu den Parametern finden sich auch im Skript selbst.
 Hier noch einmal die Übersicht:
 
-    $vl = 1;
+	$vl = 1;
 		Verboselevel an der Asterisk-CLI unter dem die Ausgaben erfolgen
 
 	$countryprefix = "\\+";
 		Länderprefix der übergebenen Telefonnummern (meist "\\+" oder "00"
 
-    $use_klicktel = 0;
-		klicktel.de nutzen, wenn "Das Oertliche" nichts gefunden hat. Klicktel kann Einträge finden, die das Oertliche nicht findet, liefert aber ab und an auch Unsinn (besonders wenn es keine Nummer findet und dann eine "Ähnlichkeitssuche" macht
+	$use_klicktel = 0;
+		11880.com (vorm. klicktel.de) nutzen, wenn "Das Oertliche" nichts gefunden hat. 11880 kann Einträge finden, die das Oertliche nicht findet, liefert aber ab und an auch Unsinn (besonders wenn es keine Nummer findet und dann eine "Ähnlichkeitssuche" macht
 
 	$cache = 1;
 		Caching nutzen
@@ -141,14 +141,30 @@ Die daraufhin gelisteten Einträge gliedern sich in Bereiche mit folgenden Prefi
     _cache - Lokalsuche im Cache
     DE-oert - Onlinesuchen auf das-oertliche.de
     DE-klick - Onlinesuchen auf klicktel.de
-    AT-abc - Onlinesuchen auf telefonabc.at
+    AT-herold - Onlinesuchen auf herold.at
     CH-telsearch - Onlinesuchen auf tel.search.ch
-	IT-pag - Onlinesuche über paginebianche.it
+    ...
 
 Diese Bereiche haben gegebenenfalls Untereinträge mit folgenden Bezeichnungen:
 
     hitfound - valider Fund, zugehöriger Name wurde gefunden
-    hitempty - Cache: Anzahl für gefundene Einträge, deren (zwischengespeicherte) Onlinesuche erfolglos war (d.h. im Web wurde damals kein Name gefunden) | Bei den Onlinesuchen steht hier die Anzahl der suchen ohne Erfolg (kein Eintrag gefunden)
+    hitempty - Cache: Anzahl für gefundene Einträge, deren (zwischengespeicherte) Onlinesuche erfolglos war (d.h. im Web wurde damals kein Name gefunden) | Bei den Onlinesuchen steht hier die Anzahl der Suchen ohne Erfolg (kein Eintrag gefunden)
     miss - Cache: Kein Eintrag - Nicht gefunden | Online: Parsingfehler
     expi - nur Cache: Verfallenen Eintrag gefunden
-    erro - nur Onlinesuche : Requesterror (Seitenaufruf fehlgeschlagen oder Timeout)
+    erro - nur Onlinesuche : Request-Error (Seitenaufruf fehlgeschlagen oder Timeout)
+
+----------------------------------------------------------------------------
+Pakete, die installiert werden sollten
+----------------------------------------------------------------------------
+
+apt install libhtml-tree-perl
+apt install build-essential  
+
+cpan install "Asterisk::AGI"
+cpan install "String::Util"
+cpan install "LWPx::ParanoidAgent"
+cpan install "HTML::TreeBuilder::XPath"
+cpan install "HTML::Entities"
+cpan install "Try::Tiny"
+
+

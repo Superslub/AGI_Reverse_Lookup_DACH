@@ -4,14 +4,14 @@
 #
 # reverse lookup / Rückwärtssuche für de,at,ch,it Nummern im Asterisk-Dialplan.
 #
-# Version 2017.05.13
+# Version 2024.06.08
 #
 #
 # Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
 #
 # Sollten die Suchanbieter ihre Webseiten (von denen die gesuchten Namen 
 # zu den Nummern kommen) ändern, so müssen nur die entsprechenden Parser in
-# den Subroutinen (oert, klick, telefonabc, telsearch) angepasst werden.
+# den Subroutinen (oert, klick, herold, telsearch) angepasst werden.
 # (Diese Routinen setzen [$reverseresult] mit dem Suchergebnis)
 #
 #
@@ -54,10 +54,13 @@ $|=1; # do not buffer output
 use Asterisk::AGI; # needed for caching in AstDB, install as root: cpan install "Asterisk::AGI"
 use String::Util 'trim';
 use HTML::TreeBuilder 5 -weak; # parses the html page, debian sid unstable: libhtml-tree-perl
+use HTML::TreeBuilder::XPath; # parses the html page, debian sid unstable: libhtml-tree-perl
+use HTML::Entities;
 use URI::Escape;
 use Encode;
 use LWPx::ParanoidAgent; #cpan install "LWPx::ParanoidAgent"
-
+use WWW::Mechanize;      #cpan install "WWW::Mechanize"
+use Try::Tiny;           #cpan install "Try::Tiny"
 ######################################################################################
 # Konfiguration
 
@@ -77,12 +80,12 @@ my $ortsvorwahl   = "030";  # eigene (nationale)Ortsvorwahl (muss MIT localprefi
 # Einstellunge Suche/Cache/Datenbank
 my $luonline      = 1;      # Nummer Online suchen, kann auch über Startparameter gesetzt werden
 my $usecache      = 1;      # Cache für Onlinesuchen nutzen, kann auch über Startparameter gesetzt werden
-my $use_klicktel  = 0;      # Klicktel-Onlinesuche nutzen (hat unscharfe Suche und liefert daher oft auch falsche Namen)
+my $use_klicktel  = 1;      # Klicktel-Onlinesuche nutzen (hat unscharfe Suche und liefert daher oft auch falsche Namen)
 
 my $staticfamilies= "";     # AstDB-families (kommasepariert) von fix gespeicherten Nummern-Namen (z.B. aus  Kundendatenbank) - (leer = aus)
-my $cachefamily   = "cidcache";# AstDB family der gespeicherten reverse lookups 
-my $cachetsfamily = "cidcachets"; #AstDB family der timestamps zu  den eintraegen in cachefamily 
-my $statsfamily   = "cidstats";# AstDB family der Statisticdatentabelle - (leer = Statistiken ausgeschaltet)
+my $cachefamily   = "cidcache";   # AstDB family der gespeicherten reverse lookups 
+my $cachetsfamily = "cidcachets"; # AstDB family der timestamps zu  den eintraegen in cachefamily 
+my $statsfamily   = "cidstats";   # AstDB family der Statisticdatentabelle - (leer = Statistiken ausgeschaltet)
 my $f_expire      = 365;    # Tage, nach denen existierender Cache-Eintrag online neu gesucht wird - (0 = nie)
 my $nf_expire     = 30;     # Tage, nach denen eine nicht-gefundene Nummer nochmals online gesucht wird - (0 = jedesmal)
                             # wenn beide expire-Zeiten 0 sind, dann werden keine Zeitstempel gespeichert!
@@ -93,14 +96,21 @@ my $refresh_names_without_ts = 1; # Einträge ohne Zeitstempel via online aktual
 # Einstellung Sitescraper
 my $ua = LWPx::ParanoidAgent->new();
    $ua->timeout(5);            # Absolutes Timeout (LWPx!) für die Online-Requests in Sekunden
-   $ua->agent('Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0) Opera 12.14'); # Useragentstring
+   $ua->agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'); # Useragentstring
+
+my $mech = WWW::Mechanize->new(
+    timeout => 5,    # Timeout in Sekunden
+    agent => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'  # User-Agent
+);
+
+
 
 # Ende Konfiguration
 ######################################################################################
 
 my $number = trim($ARGV[0]);
 
-my $reverseresult = undef;   #data for actual reverse lookup
+my $reverseresult = undef;   # holds data from actual reverse lookup
 my $nowtime = time();        # Zeitstring
 my $expired_c_name = "";     # speichert verfallenen Namen zwischen
 
@@ -146,7 +156,7 @@ if (defined $ARGV[3]) { #lookup online
 
 if (!defined $ARGV[4]) { #Aufruf von der Shell
     $AGI->verbose("RS: ARGV Start from Shell: OFF - for Shell-starting use commanline parameter!", $vl); 
-    # nur wenn kein 5. Parameter angegeben ist, dann inputpasrsing (an der Shell funktioniert das nicht)
+    # nur wenn kein 5. Parameter angegeben ist, dann inputparsing (an der Shell funktioniert das nicht)
     my %input = $AGI->ReadParse(); # AGI Eingabeverarbeitung
 }else{
     $AGI->verbose("RS: ARGV Start from Shell: ON", $vl);
@@ -155,23 +165,26 @@ if (!defined $ARGV[4]) { #Aufruf von der Shell
 $f_expire  = $f_expire  * 86400; # umrechnen in Sekunden
 $nf_expire = $nf_expire * 86400; # umrechnen in Sekunden
 
-# Nummer normalisieren
+# Nummer auf Form mit vorangestellter "00" normalisieren
 
-# wenn Nummer mit interprefix1 beginnt, dieses durch interprefix2 ersetzen
+# wenn Nummer mit interprefix1(+) beginnt, dieses durch interprefix2(00) ersetzen
 if($interprefix1 && (substr($number,0,length($interprefix1)) eq $interprefix1)){
     $number = $interprefix2.substr($number,length($interprefix1));
+    $AGI->verbose("Norm: 1", $vl);
 }
 
 if(!($interprefix2 && (substr($number,0,length($interprefix2)) eq $interprefix2))){ # Nummer ohne interpref(z.B. 030123456)
     if(substr($number,0,length($localprefix)) eq $localprefix){ # Nummer mit Ortsvorwahl (z.B. 0301234567)
+        $AGI->verbose("Norm: 2", $vl);
         $number = $interprefix2.$landesvorwahl.substr($number,length($localprefix));
     } else { # Nummern ohne Ortsvorwahl (z.B. 1234567)
+        $AGI->verbose("Norm: 2", $vl);
         $number = $interprefix2.$landesvorwahl.substr($ortsvorwahl,length($localprefix)).$number;
     }
 }
 
 # Land bestimmen
-my $cp = substr($number,length($interprefix1),2);
+my $cp = substr($number, length($interprefix2), 2);
 my $country = $cp;
 if($cp eq '49'){ $country = 'DE';}
 elsif($cp eq '43'){ $country = 'AT';}
@@ -327,14 +340,14 @@ sub reverselookup {
         if ($country eq "IT") {
             paginebianche($number);
         } elsif ($country eq "AT") {
-            telefonabc($number);
+            herold($number);
         } elsif ($country eq "CH") {
             telsearch($number);
         } elsif ($country eq "FR") {
             pagesblanches( $number );
         } elsif ($country eq "DE") {
             oert($number);
-        	if(! $reverseresult && $use_klicktel){
+            if(! $reverseresult && $use_klicktel){
                 klick($number);
             }
         } else {
@@ -350,19 +363,28 @@ my $response = undef;
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub oert {
     $AGI->verbose("RS: Onlinesearch (oert):".$number, $vl); 
-    $reverseresult = undef;
     $url = "http://www.dasoertliche.de/?form_name=search_inv&ph=".uri_escape($number);
-    $response = $ua->get($url);
-    if($response->is_success && length($response->content) > 5000){ # Laenge wegen T-Online "Navigationshilfe" o.ä.
-        my $html = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $response->content())));
+    $reverseresult = undef;
 
-#        if (( 1 == 2 ) && ( defined $htmloert )) {
-        if (defined $html ) {
-            $reverseresult = $html->look_down(
-            _tag => 'span',
-            class => 'st-treff-name');
-            if (defined $reverseresult ) {
-                $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
+    try{
+	 $mech->get($url);
+
+         if($mech->success() && length($mech->content()) > 5000){
+            my $tree = HTML::TreeBuilder::XPath->new;        # Erzeuge ein TreeBuilder-Objekt
+            $tree->parse(encode("utf8", $mech->content()));                  # Lade den HTML-Inhalt in den Baum
+	
+            # mögliche Fehlermeldung, wenn ->parse fehlschlägt
+            #    $AGI->verbose("RS: oert(online): Treebuilder cannot read page!", $vl);
+            #    addstats("DE-oert",0,0,1,0,0); # miss - Parsingfehler
+
+            #$AGI->verbose("RS: ".$tree->dump(), $vl);
+            my $xpath_query = '//div[@id="entry_1"]//a[@class="hitlnk_name"]';   # XPath zum Namen
+
+            my @nodes = $tree->findnodes($xpath_query);	 # Finde die Knoten, die zur XPath-Abfrage passen
+
+            if (@nodes) {
+                $reverseresult = $nodes[0]->as_trimmed_text(extra_chars => '\xA0');
+                #$reverseresult =  encode('utf-8', $nodes[0]->as_trimmed_text());
                 $AGI->verbose("RS: oert(online) Gefunden: [".$reverseresult."]", $vl);
                 addstats("DE-oert",1,0,0,0,0); # hit
             } else {
@@ -371,138 +393,163 @@ sub oert {
                 addstats("DE-oert",0,1,0,0,0); # empty hit
             }
 
-        } else {
-            $AGI->verbose("RS: oert(online): Treebuilder cannot read page!", $vl);
-            addstats("DE-oert",0,0,1,0,0); # miss - Parsingfehler
+            $tree->delete();                                 # Speicher freigeben
+
+
+        }else{ 
+            $AGI->verbose("RS: oert(online): HTTP-Request failed (".length($mech->content())."): ".$mech->status(), $vl);
+            addstats("DE-oert",0,0,0,0,1); # error - Requesterror
         }
-    }else{
-        $AGI->verbose("RS: oert(online): HTTP-Request failed (".length($response->content)."): ".$response->status_line, $vl);
+    }catch{
+        $AGI->verbose("RS: oert(online): HTTP-Request gone", $vl);
         addstats("DE-oert",0,0,0,0,1); # error - Requesterror
     }
+
 }
+
 ## german numbers (DE) ##
 # muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub klick {
     $AGI->verbose("RS: Onlinesearch (klick):".$number, $vl); 
+    $url = "http://www.11880.com/suche/".uri_escape($number)."/deutschland";
     $reverseresult  = undef;
-    $url = "https://www.klicktel.de/suche/".uri_escape($number);
-	$ua->ssl_opts( verify_hostnames => 0 ,SSL_verify_mode => 0x00);
-    $response = $ua->get($url);
-    if($response->is_success && length($response->content) > 5000){ # Laenge wegen T-Online "Navigationshilfe" o.ä.){
-        my $tree = HTML::TreeBuilder->new_from_content( $response->content );
 
-        if (defined $tree ) {
-            my $e = $tree->look_down(_tag => 'div', class => 'entry-item');
-            if(defined $e){
-			
-                $reverseresult = $e->look_down(
-				_tag => 'h1',
-				class => 'title',
-				'itemprop' => 'name'
-				);
+    try{
 
-                if ( $reverseresult ) {
-				    $reverseresult = $reverseresult->as_trimmed_text(extra_chars => '\xA0');
-                    #$reverseresult = substr($reverseresult->as_trimmed_text(extra_chars => '\xA0'),3);
-                    $AGI->verbose("RS: klick(online) Gefunden: [".$reverseresult."]", $vl);
-                    addstats("DE-klick",1,0,0,0,0); # hit
-                } else {
-                    $reverseresult = "";
-                    $AGI->verbose("RS: klick(online): Nummer nicht gefunden", $vl);
-                    addstats("DE-klick",0,1,0,0,0); # empty hit
-                }
+	 $mech->get($url);
+
+         if($mech->success() && length($mech->content()) > 5000){
+            my $tree = HTML::TreeBuilder::XPath->new;        # Erzeuge ein TreeBuilder-Objekt
+            $tree->parse(encode("utf8", $mech->content()));  # Lade den HTML-Inhalt in den Baum
+            #$tree->parse(encode("utf8", decode("iso-8859-1", $mech->content())));  # Lade den HTML-Inhalt in den Baum
+
+            # zur Ausgabe der Server-Rückgabe entkommentieren
+            #$AGI->verbose("RS: ".$tree->dump(), $vl);
+
+            my $xpath_query = '//h1[@class="title"]';   # XPath zum Namen
+
+            my @nodes = $tree->findnodes($xpath_query);	 # Finde die Knoten, die zur XPath-Abfrage passen
+
+            if (@nodes) {
+                # $reverseresult = $nodes[0]->as_trimmed_text(extra_chars => '\xA0');
+                $reverseresult =  encode('utf-8', decode_entities($nodes[0]->as_trimmed_text()));
+                $AGI->verbose("RS: klick(online) Gefunden: [".$reverseresult."]", $vl);
+                addstats("DE-klick",1,0,0,0,0); # hit
             } else {
                 $reverseresult = "";
                 $AGI->verbose("RS: klick(online): Nummer nicht gefunden", $vl);
                 addstats("DE-klick",0,1,0,0,0); # empty hit
             }
-        } else {
-            $AGI->verbose("RS: klick(online): Treebuilder cannot read page!", $vl);
-            addstats("DE-klick",0,0,1,0,0); # miss - Parsingfehler
+
+            $tree->delete();                                 # Speicher freigeben
+
+        }else{ 
+            $AGI->verbose("RS: klick(online): HTTP-Request failed (".length($mech->content())."): ".$mech->status(), $vl);
+            addstats("DE-klick",0,0,0,0,1); # error - Requesterror
         }
-    }else{
-        $AGI->verbose("RS: klick(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line,2);
+    }catch{
+        $AGI->verbose("RS: klick(online): HTTP-Request gone", $vl);
         addstats("DE-klick",0,0,0,0,1); # error - Requesterror
     }
+
 }
 
-## austria numbers (AT) +43 ##
+## austrian numbers (AT -43) ##
 # muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
-sub telefonabc {
-	$AGI->verbose("RS: Onlinesearch (telefonabc):".$number, $vl); 
-    $reverseresult = undef;
-    $url = "http://www.telefonabc.at/result.aspx?what=".uri_escape($number);
-    $response = $ua->get($url);
-    if($response->is_success && length($response->content) > 5000){
-        my $html = HTML::TreeBuilder->new_from_content(encode("utf8", decode("iso-8859-1", $response->content())));
-        if ( defined $html ) {
-            $reverseresult = $html->look_down(
-            _tag => 'a',
-            class => 'h_green');
-			$reverseresult = $html->look_down(
-            #_tag => 'h3',
-            #class => 'card-heading pull-left',
-			'itemprop'=>'name');
-			
-            if (defined $reverseresult ) {
-                $reverseresult = $reverseresult->as_trimmed_text;
-                addstats("AT-tabc",1,0,0,0,0); # hit
+sub herold {
+    $AGI->verbose("RS: Onlinesearch (herold):".$number, $vl); 
+    $url = "https://www.herold.at/telefonbuch/suche/?userTerm=".uri_escape($number);
+    $reverseresult  = undef;
+
+    try{
+
+	 $mech->get($url);
+
+         if($mech->success() && length($mech->content()) > 5000){
+            my $tree = HTML::TreeBuilder::XPath->new;        # Erzeuge ein TreeBuilder-Objekt
+            $tree->parse(encode("utf8", $mech->content()));  # Lade den HTML-Inhalt in den Baum
+            #$tree->parse(encode("utf8", decode("iso-8859-1", $mech->content())));  # Lade den HTML-Inhalt in den Baum
+
+            # zur Ausgabe der Server-Rückgabe entkommentieren
+            #$AGI->verbose("RS: ".$tree->dump(), $vl);
+
+            my $xpath_query = '//*[starts-with(@class, "white-pages-search-result-item_heading")]';   # XPath zum Namen
+
+            my @nodes = $tree->findnodes($xpath_query);	 # Finde die Knoten, die zur XPath-Abfrage passen
+
+            if (@nodes) {
+                $reverseresult = $nodes[0]->as_trimmed_text(extra_chars => '\xA0');
+                # $reverseresult =  encode('utf-8', decode_entities($nodes[0]->as_trimmed_text()));
+                $AGI->verbose("RS: herold(online) Gefunden: [".$reverseresult."]", $vl);
+                addstats("DE-herold",1,0,0,0,0); # hit
             } else {
                 $reverseresult = "";
-                $AGI->verbose("RS: telefonabc(online): Nummer nicht gefunden", $vl);
-                addstats("AT-tabc",0,1,0,0,0); # empty hit
+                $AGI->verbose("RS: herold(online): Nummer nicht gefunden", $vl);
+                addstats("DE-herold",0,1,0,0,0); # empty hit
             }
-        } else {
-            $AGI->verbose("RS: telefonabc(online): Treebuilder cannot read page!", $vl);
-            addstats("AT-tabc",0,0,1,0,0); # miss - Parsingfehler
+
+            $tree->delete();                                 # Speicher freigeben
+
+        }else{ 
+            $AGI->verbose("RS: herold(online): HTTP-Request failed (".length($mech->content())."): ".$mech->status(), $vl);
+            addstats("DE-herold",0,0,0,0,1); # error - Requesterror
         }
-    }else{
-        if(substr($response->status_line,0,3) eq "404" && length($response->content) > 5000){
-            $reverseresult = "";
-            $AGI->verbose("RS: telefonabc.at(online): Nummer nicht gefunden (404)", $vl);
-            addstats("AT-tabc",0,1,0,0,0); # empty hit - telefonabc liefert Status 404 bei nichtgefundener Nummer!
-        }else{
-            $AGI->verbose("RS: telefonabc.at(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
-            addstats("AT-tabc",0,0,0,0,1); # error - Requesterror "echter" 404
-        }
+    }catch{
+        $AGI->verbose("RS: herold(online): HTTP-Request gone", $vl);
+        addstats("DE-herold",0,0,0,0,1); # error - Requesterror
     }
 }
 
-## swiss numbers (CH) +41 ##
+
+## swiss numbers CH +41) ##
 # muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub telsearch {
     $AGI->verbose("RS: Onlinesearch (telsearch):".$number, $vl); 
-    $reverseresult = undef;
     $url = "http://tel.search.ch/?was=".uri_escape($number);
-    $response = $ua->get($url);
-    if($response->is_success && length($response->content) > 5000){
-		my $html = HTML::TreeBuilder->new_from_content ( $response->content );
-        if ( defined $html ) {
-            $reverseresult = $html->look_down(
-	
-            _tag => 'a',
-            "data-stats" => qr/.+/);  # regulärer Ausdruck für "so ziemlich Alles"
-			
-            if (defined $reverseresult ) {
-                $reverseresult = $reverseresult->as_trimmed_text;
-                addstats("CH-tels",1,0,0,0,0); # hit
+    $reverseresult  = undef;
+
+    try{
+
+	 $mech->get($url);
+
+         if($mech->success() && length($mech->content()) > 5000){
+            my $tree = HTML::TreeBuilder::XPath->new;        # Erzeuge ein TreeBuilder-Objekt
+            $tree->parse(encode("utf8", $mech->content()));  # Lade den HTML-Inhalt in den Baum
+            #$tree->parse(encode("utf8", decode("iso-8859-1", $mech->content())));  # Lade den HTML-Inhalt in den Baum
+
+            # zur Ausgabe der Server-Rückgabe entkommentieren
+            #$AGI->verbose("RS: ".$tree->dump(), $vl);
+
+            my $xpath_query = '//div[@class="tel-result-content"]//a[@data-stats]';   # XPath zum Namen
+
+            my @nodes = $tree->findnodes($xpath_query);	 # Finde die Knoten, die zur XPath-Abfrage passen
+
+            if (@nodes) {
+                $reverseresult = $nodes[0]->as_trimmed_text(extra_chars => '\xA0');
+                # $reverseresult =  encode('utf-8', decode_entities($nodes[0]->as_trimmed_text()));
+                $AGI->verbose("RS: telsearch(online) Gefunden: [".$reverseresult."]", $vl);
+                addstats("DE-telsearch",1,0,0,0,0); # hit
             } else {
                 $reverseresult = "";
                 $AGI->verbose("RS: telsearch(online): Nummer nicht gefunden", $vl);
-                addstats("CH-tels",0,1,0,0,0); # empty hit
+                addstats("DE-telsearch",0,1,0,0,0); # empty hit
             }
-        } else {
-            $AGI->verbose("RS: telsearch(online): Treebuilder cannot read page!", $vl);
-            addstats("CH-tels",0,0,1,0,0); # miss - Parsingfehler
+
+            $tree->delete();                                 # Speicher freigeben
+
+        }else{ 
+            $AGI->verbose("RS: telsearch(online): HTTP-Request failed (".length($mech->content())."): ".$mech->status(), $vl);
+            addstats("DE-telsearch",0,0,0,0,1); # error - Requesterror
         }
-    }else{
-        $AGI->verbose("RS: telsearch(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
-        addstats("CH-tels",0,0,0,0,1); # error - Requesterror
+    }catch{
+        $AGI->verbose("RS: telsearch(online): HTTP-Request gone", $vl);
+        addstats("DE-telsearch",0,0,0,0,1); # error - Requesterror
     }
 }
+
 
 ## Italian numbers (IT) +39 ## thx AAG
 # muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
