@@ -1,9 +1,10 @@
 ﻿README zu  AGI_Reverse_Lookup_DACH
 
 Das Perl-Skript dient der Namensauflösung von Telefonnummern (Rückwärtssuche) im Asterisk-Dialplan
-Unterstützt derzeit Deutschland (D), Österreich (A), Schweiz (CH), Italien (IT), Frankreich (FR)
+Unterstützt derzeit Deutschland (D), Österreich (A), Schweiz (CH)
 
 Versionsgeschichte:
+2024.06.11   IT und FR aus der Rückwärtssuche herausgenommen
 2024.06.08   Gefixt: Ländervorwahl-Bug (Dank an Dagobert), GET mit mechanize, Scraping via XPath, Aktualisiert: oert, klick (jetzt 11880), herold (AT)
 2021.04.21   ReverseSearch für "Das Örtliche" gefixt (Twilight-Networks) / Frankreich hinzugefügt (psychedelys)
 2021.03.24   ReverseSearch für "Das Örtliche" gefixt (Twilight-Networks)
