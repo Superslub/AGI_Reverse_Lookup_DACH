@@ -2,12 +2,12 @@
 # Achtung: Leerzeichen hinter "#!/usr/bin/perl "
 # ansonsten kommt es zu einem "no such file or directory"-Fehler!
 #
-# reverse lookup / Rückwärtssuche für de,at,ch,it Nummern im Asterisk-Dialplan.
+# reverse lookup / Rückwärtssuche für de,at,ch Nummern im Asterisk-Dialplan.
 #
-# Version 2024.06.08
+# Version 2024.06.11
 #
 #
-# Gefundene Namen werden in der Asterisk.Variable ${RESULTREV} gespeichert
+# Gefundene Namen werden in der Asterisk-Variable ${RESULTREV} gespeichert
 #
 # Sollten die Suchanbieter ihre Webseiten (von denen die gesuchten Namen 
 # zu den Nummern kommen) ändern, so müssen nur die entsprechenden Parser in
@@ -21,7 +21,7 @@
 #   - static: Name der zu nutzenden Datenbank oder 0, um diese Suche zu unterbinden
 #   - cache:  Nutzung des Caches ein- (1) oder ausschalten (0)
 #   - luonline: Onlinesuche ein- (1) oder ausschalten (0) 
-#   - fromshell: bei Start vond er Shell sollte dieser Paraneter auf (1) gesetzt werden
+#   - fromshell: bei Start vond er Shell sollte dieser Parameter auf (1) gesetzt werden
 #
 # Die Suche funktioniert folgendermaßen:
 # - Zuerst wird in den fixen Datenbanken aus "staticfamilies" nach einem Eintrag gesucht
@@ -58,7 +58,6 @@ use HTML::TreeBuilder::XPath; # parses the html page, debian sid unstable: libht
 use HTML::Entities;
 use URI::Escape;
 use Encode;
-use LWPx::ParanoidAgent; #cpan install "LWPx::ParanoidAgent"
 use WWW::Mechanize;      #cpan install "WWW::Mechanize"
 use Try::Tiny;           #cpan install "Try::Tiny"
 ######################################################################################
@@ -93,11 +92,7 @@ my $nf_expire     = 30;     # Tage, nach denen eine nicht-gefundene Nummer nochm
 my $dont_delete_existing = 1;  # wenn gesetzt, werden keine Expired-Cachenames mit Leernamen (=in Datenbank, aber nicht mehr online zu finden) ersetzt 
 my $refresh_names_without_ts = 1; # Einträge ohne Zeitstempel via online aktualisieren? (nein = Zeitstempel wird auf aktuelle Zeit gesetzt) (Abwärtskompatibilität)
 
-# Einstellung Sitescraper
-my $ua = LWPx::ParanoidAgent->new();
-   $ua->timeout(5);            # Absolutes Timeout (LWPx!) für die Online-Requests in Sekunden
-   $ua->agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'); # Useragentstring
-
+# add your proxy here
 my $mech = WWW::Mechanize->new(
     timeout => 5,    # Timeout in Sekunden
     agent => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'  # User-Agent
@@ -125,8 +120,8 @@ $AGI->verbose("RS: cachetsfamily = (${cachetsfamily})", $vl+1);
 $AGI->verbose("RS:      f_expire = (${f_expire}) days", $vl+1);
 $AGI->verbose("RS:     nf_expire = (${nf_expire}) days", $vl+1);
 $AGI->verbose("RS: refresh_names_without_ts = (${refresh_names_without_ts})", $vl+1);
-$AGI->verbose("RS:   ua->timeout = (".$ua->timeout().") sec", $vl+1);
-$AGI->verbose("RS:     ua->agent = (".$ua->agent.")", $vl+1);
+$AGI->verbose("RS: mech->timeout = (".$mech->timeout().") sec", $vl+1);
+$AGI->verbose("RS:   mech->agent = (".$mech->agent.")", $vl+1);
 $AGI->verbose("RS:       nowtime = (${nowtime})", $vl+1);
 $AGI->verbose("RS:      usecache = (${usecache})", $vl+1);
 $AGI->verbose("RS:      luonline = (${luonline})", $vl+1);
@@ -189,8 +184,6 @@ my $country = $cp;
 if($cp eq '49'){ $country = 'DE';}
 elsif($cp eq '43'){ $country = 'AT';}
 elsif($cp eq '41'){ $country = 'CH';}
-elsif($cp eq '39'){ $country = 'IT';}
-elsif($cp eq '33'){ $country = 'FR';}
 
 $AGI->verbose("RS:   number(std) = (${number})",  $vl+1);
 $AGI->verbose("RS:       country = (${country})", $vl+1);
@@ -337,14 +330,10 @@ my $i = 0;
 sub reverselookup {
     $reverseresult = undef;
     if($luonline){
-        if ($country eq "IT") {
-            paginebianche($number);
-        } elsif ($country eq "AT") {
+        if ($country eq "AT") {
             herold($number);
         } elsif ($country eq "CH") {
             telsearch($number);
-        } elsif ($country eq "FR") {
-            pagesblanches( $number );
         } elsif ($country eq "DE") {
             oert($number);
             if(! $reverseresult && $use_klicktel){
@@ -550,77 +539,6 @@ sub telsearch {
     }
 }
 
-
-## Italian numbers (IT) +39 ## thx AAG
-# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
-# im Fehlerfall wird $reversesearch undefiniert gesetzt
-# e.g. www.paginebianche.it/eng/ricerca-da-numero?qs=038229693
-sub paginebianche {
-    $AGI->verbose("RS: Onlinesearch (paginebianche):".$number, $vl); 
-    $reverseresult = undef;
-	$number =  "0".(substr $number, 3);
-    $url = "http://www.paginebianche.it/eng/ricerca-da-numero?qs=".uri_escape($number);
-    $response = $ua->get($url);
-    if($response->is_success && length($response->content) > 5000){
-        my $html = HTML::TreeBuilder->new_from_content ( $response->content );
-        if ( defined $html ) {
-			
-			$reverseresult = $html->look_down(
-				_tag => 'h2',
-				class => 'rgs'
-			);
-			
-			if (defined $reverseresult ) {
-                $reverseresult = $reverseresult->as_trimmed_text;
-                addstats("IT-pag",1,0,0,0,0); # hit
-            } else {
-                $reverseresult = "";
-                $AGI->verbose("RS: paginebianche(online): Nummer nicht gefunden", $vl);
-                addstats("IT-pag",0,1,0,0,0); # empty hit
-            }
-        } else {
-            $AGI->verbose("RS: paginebianche(online): Treebuilder cannot read page!", $vl);
-            addstats("IT-pag",0,0,1,0,0); # miss - Parsingfehler
-        }
-    }else{
-        $AGI->verbose("RS: paginebianche(online): HTTP-Request failed (".length($response->content)."): ". $response->status_line, $vl);
-        addstats("IT-pag",0,0,0,0,1); # error - Requesterror
-    }
-}
-
-## French numbers (IT) +33 ##
-# muss im Erfolgsfall (auch wenn die Nummer nicht gefunden wurde!) $reversesearch setzen
-# im Fehlerfall wird $reversesearch undefiniert gesetzt
-# http://www.pagesjaunes.fr/annuaireinverse/recherche?quoiqui=0102030405&proximite=0
-sub pagesblanches {
-    $AGI->verbose( "RS: Onlinesearch (pagesblanches):" . $number, $vl );
-    $reverseresult = undef;
-    $number        = "0" . ( substr $number, 3 );
-    $url           = "http://www.pagesjaunes.fr/annuaireinverse/recherche?quoiqui=" . uri_escape( $number ) . "&proximite=0";
-    $response      = $ua->get( $url );
-    if ( $response->is_success && length( $response->content ) > 5000 ) {
-        my $html = HTML::TreeBuilder->new_from_content( $response->content );
-        if ( defined $html ) {
-            $reverseresult = $html->look_down( _tag  => 'a',
-                                               class => 'denomination-links pj-lb pj-link' );
-
-            if ( defined $reverseresult ) {
-                $reverseresult = $reverseresult->as_trimmed_text;
-                addstats( "FR-pag", 1, 0, 0, 0, 0 );    # hit
-            } else {
-                $reverseresult = "";
-                $AGI->verbose( "RS: pagesblanches(online): Nummer nicht gefunden", $vl );
-                addstats( "FR-pag", 0, 1, 0, 0, 0 );    # empty hit
-            }
-        } else {
-            $AGI->verbose( "RS: pagesblanches(online): Treebuilder cannot read page!", $vl );
-            addstats( "FR-pag", 0, 0, 1, 0, 0 );        # miss - Parsingfehler
-        }
-    } else {
-        $AGI->verbose( "RS: pagesblanches(online): HTTP-Request failed (" . length( $response->content ) . "): " . $response->status_line, $vl );
-        addstats( "FR-pag", 0, 0, 0, 0, 1 );            # error - Requesterror
-    }
-}
 
 # arg[0] = Subject , z.B. _static, _cache, DE-oert, DE-klick, AT-abc, CH-telsearch, IT-pag, FR-pag
 # arg[1] = Hits to add              [hitfound]  valider Fund, Name gefunden
