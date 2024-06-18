@@ -255,7 +255,7 @@ my $i = 0;
                     reverselookup();
                 }
             }else{ # kein zeitstempeleintrag gefunden
-                $AGI->verbose("RS: Cachesearch(5): Name/TS-Entry not found -> search online".$number, $vl);
+                $AGI->verbose("RS: Cachesearch(5): Name/TS-Entry not found -> search online ".$number, $vl);
                 addstats("_cache",0,0,1,0,0);
                 reverselookup();
             }
