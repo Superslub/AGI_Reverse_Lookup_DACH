@@ -378,7 +378,7 @@ sub oert {
                 addstats("DE-oert",1,0,0,0,0); # hit
             } else {
                 $reverseresult = "";
-                $AGI->verbose("RS: oert(online): Nummer nicht gefunden", $vl);
+                $AGI->verbose("RS: oert(online): Nummer nicht in Antwort gefunden", $vl);
                 addstats("DE-oert",0,1,0,0,0); # empty hit
             }
 
@@ -390,8 +390,13 @@ sub oert {
             addstats("DE-oert",0,0,0,0,1); # error - Requesterror
         }
     }catch{
-        $AGI->verbose("RS: oert(online): HTTP-Request gone", $vl);
-        addstats("DE-oert",0,0,0,0,1); # error - Requesterror
+        if ($mech->status() == 410){
+            $AGI->verbose("RS: oert(online): Nummer in nicht gefunden", $vl);
+            addstats("DE-oert",0,1,0,0,0); # empty hit
+        }else{
+            $AGI->verbose("RS: oert(online): HTTP-Request gone", $vl);
+            addstats("DE-oert",0,0,0,0,1); # error - Requesterror
+        }
     }
 
 }
