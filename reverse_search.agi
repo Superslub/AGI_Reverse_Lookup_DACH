@@ -352,7 +352,7 @@ my $response = undef;
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub oert {
     $AGI->verbose("RS: Onlinesearch (oert):".$number, $vl); 
-    $url = "http://www.dasoertliche.de/?form_name=search_inv&ph=".uri_escape($number);
+    $url = "https://www.dasoertliche.de/?form_name=search_inv&ph=".uri_escape($number);
     $reverseresult = undef;
 
     try{
@@ -406,7 +406,7 @@ sub oert {
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub klick {
     $AGI->verbose("RS: Onlinesearch (klick):".$number, $vl); 
-    $url = "http://www.11880.com/suche/".uri_escape($number)."/deutschland";
+    $url = "https://www.11880.com/suche/".uri_escape($number)."/deutschland";
     $reverseresult  = undef;
 
     try{
@@ -502,7 +502,7 @@ sub herold {
 # im Fehlerfall wird $reversesearch undefiniert gesetzt
 sub telsearch {
     $AGI->verbose("RS: Onlinesearch (telsearch):".$number, $vl); 
-    $url = "http://tel.search.ch/?was=".uri_escape($number);
+    $url = "https://tel.search.ch/?was=".uri_escape($number);
     $reverseresult  = undef;
 
     try{
